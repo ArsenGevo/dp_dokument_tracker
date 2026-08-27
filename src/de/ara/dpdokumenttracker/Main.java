@@ -29,10 +29,17 @@ public class Main {
 
         String html = response.body();
 
-        System.out.println(html);
-
+        System.out.println("HTTP Status: " + response.statusCode());
+        
+        String busyMassage = "Наразі всі місця зайняті.";
+        
+        if (html.contains(busyMassage)) {
+        	System.out.println("DP Dokument Berlin: Наразі всі місця зайняті.");
+        } else {
+        	System.out.println("DP Dokument Berlin: Cостояние страницы изменилось!");
+        }
+        
 		
-
 	}
 
 }
