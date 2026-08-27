@@ -16,7 +16,7 @@ public class Main {
         ERROR
     }
 
-	public static void main(String[] args) throws IOException, InterruptedException {
+	public static void main(String[] args) {
 		
 	    AppointmentStatus status;
 
