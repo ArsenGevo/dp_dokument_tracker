@@ -5,17 +5,36 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.io.IOException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.time.LocalTime;
+import java.time.temporal.ChronoUnit;
 
 public class Main {
 
 	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";
 	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
+	private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
 
 	private enum AppointmentStatus {
 		FULLY_BOOKED, PAGE_CHANGED, ERROR, RATE_LIMITED
 	}
-
+	private static AppointmentStatus previousStatus = null;
+	
+		
 	public static void main(String[] args) {
+		
+		
+	    ScheduledExecutorService scheduler =
+	            Executors.newSingleThreadScheduledExecutor();
+	    
+	    scheduler.scheduleAtFixedRate(Main::checkOnce, 0, 1, TimeUnit.MINUTES);
+		
+		
+	}
+	
+	public static void checkOnce() {
 
 		AppointmentStatus status;
 
@@ -23,18 +42,20 @@ public class Main {
 
 			HttpResponse<String> response = loadPage();
 
-			//String html = response.body();
-
 			int httpStatusCode = response.statusCode();
 
-			System.out.println("HTTP Status: " + httpStatusCode);
+			System.out.println(time() + " HTTP Status: " + httpStatusCode);
 
 			if (httpStatusCode >= 200 && httpStatusCode < 300) {
+				
 				status = checkStatus(response.body());
 
 			} else if (httpStatusCode == 429) {
+				
 				status = AppointmentStatus.RATE_LIMITED;
+				
 			} else {
+				
 				status = AppointmentStatus.ERROR;
 			}
 
@@ -47,10 +68,32 @@ public class Main {
 			Thread.currentThread().interrupt();
 			status = AppointmentStatus.ERROR;
 		}
-		printStatus(status);
+		
+		if (status != previousStatus) {
+			printStatus(status);
+		}
+		
 	}
 
-	public static void printStatus(AppointmentStatus status) {
+	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
+
+		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).GET().build();
+
+		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+
+		return response;
+	}
+
+	private static AppointmentStatus checkStatus(String html) {
+
+		if (html.contains(BUSY_MESSAGE)) {
+			return AppointmentStatus.FULLY_BOOKED;
+		}
+
+		return AppointmentStatus.PAGE_CHANGED;
+	}
+	
+	private static void printStatus(AppointmentStatus status) {
 		switch (status) {
 		case FULLY_BOOKED:
 			System.out.println("DP Dokument: Наразі всі місця зайняті.");
@@ -67,23 +110,11 @@ public class Main {
 		}
 	}
 
-	public static HttpResponse<String> loadPage() throws IOException, InterruptedException {
-
-		HttpClient client = HttpClient.newHttpClient();
-
-		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).GET().build();
-
-		HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-		return response;
-	}
-
-	public static AppointmentStatus checkStatus(String html) {
-
-		if (html.contains(BUSY_MESSAGE)) {
-			return AppointmentStatus.FULLY_BOOKED;
-		}
-
-		return AppointmentStatus.PAGE_CHANGED;
-	}
+	private static LocalTime time() {
+		LocalTime now = LocalTime.now();
+		LocalTime time = now.truncatedTo(ChronoUnit.MINUTES);
+		return time;
+	}	
 }
+
+
