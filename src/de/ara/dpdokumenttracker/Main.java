@@ -23,15 +23,15 @@ public class Main {
 
 			HttpResponse<String> response = loadPage();
 
-			String html = response.body();
+			//String html = response.body();
 
 			int httpStatusCode = response.statusCode();
-			
-			System.out.println("HTTP Status: " + response.statusCode());
+
+			System.out.println("HTTP Status: " + httpStatusCode);
 
 			if (httpStatusCode >= 200 && httpStatusCode < 300) {
-				status = checkStatus(html);
-				
+				status = checkStatus(response.body());
+
 			} else if (httpStatusCode == 429) {
 				status = AppointmentStatus.RATE_LIMITED;
 			} else {
@@ -61,7 +61,7 @@ public class Main {
 		case ERROR:
 			System.out.println("ошибка проверки!");
 			break;
-		case RATE_LIMITED: 
+		case RATE_LIMITED:
 			System.out.println("превышение лимита запросов!");
 			break;
 		}
