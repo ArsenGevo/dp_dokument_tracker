@@ -70,7 +70,8 @@ public class Main {
 		}
 		
 		if (status != previousStatus) {
-			printStatus(status);
+			notifyStatusChange(status);
+			previousStatus = status;
 		}
 		
 	}
@@ -108,6 +109,10 @@ public class Main {
 			System.out.println("превышение лимита запросов!");
 			break;
 		}
+	}
+	
+	private static void notifyStatusChange(AppointmentStatus status) {
+	    printStatus(status);
 	}
 
 	private static LocalTime time() {
