@@ -16,11 +16,13 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.logging.Logger;
+import java.util.logging.Level;
 
 public class Main {
 
-	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";	
-	//private static final String URL = "http://127.0.0.1:5500/index.html";
+	//private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";	
+	private static final String URL = "http://127.0.0.1:5500/index.html";
 	
 	
 	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
@@ -28,9 +30,13 @@ public class Main {
 	private static final HttpClient HTTP_CLIENT =
 	        HttpClient.newBuilder()
 	                
-	        		//.version(HttpClient.Version.HTTP_1_1)
+	        		//
+	        .version(HttpClient.Version.HTTP_1_1)
 	                .connectTimeout(Duration.ofSeconds(5))
 	                .build();
+	
+	private static final Logger LOGGER =
+	        TrackerLogger.getLogger();
 
 	private enum AppointmentStatus {
 		FULLY_BOOKED, 
@@ -51,8 +57,8 @@ public class Main {
 	    ScheduledExecutorService scheduler =
 	            Executors.newSingleThreadScheduledExecutor();
 	    
-	    scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 5, TimeUnit.MINUTES);
-	    //scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
+	    //scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 5, TimeUnit.MINUTES);
+	    scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 	    
 		
 	}
@@ -65,6 +71,12 @@ public class Main {
 	    } catch (Exception e) {
 
 	        e.printStackTrace();
+	        
+	        LOGGER.log(
+	                Level.SEVERE,
+	                "Unexpected error in scheduled check",
+	                e
+	        );
 	    }
 	}
 	
@@ -78,8 +90,6 @@ public class Main {
 			HttpResponse<String> response = loadPage();
 
 			int httpStatusCode = response.statusCode();
-
-			System.out.println(time() + " HTTP Status: " + httpStatusCode);
 
 			if (httpStatusCode >= 200 && httpStatusCode < 300) {
 				
@@ -102,15 +112,30 @@ public class Main {
 				
 				status = AppointmentStatus.ERROR;
 			}
+			
+			logHttpResult(httpStatusCode, status);
 
 		} catch (IOException e) {
 
 			status = AppointmentStatus.NETWORK_ERROR;
-
-		} catch (InterruptedException e) {
+		   
+		    LOGGER.log(
+		            Level.WARNING,
+		            "NETWORK_ERROR | "
+		                    + e.getClass().getSimpleName()
+		    );
+		} 
+		catch (InterruptedException e) {
 
 			Thread.currentThread().interrupt();
 			status = AppointmentStatus.ERROR;
+			
+			LOGGER.log(
+		            Level.WARNING,
+		            "Check thread was interrupted",
+		            e
+		    );
+			
 		}
 		
 		catch (Exception e) {
@@ -120,6 +145,14 @@ public class Main {
 		}
 		
 		if (status != previousStatus) {
+			
+			LOGGER.info(
+			        "STATUS_CHANGE | "
+			        + previousStatus
+			        + " -> "
+			        + status
+			);
+			
 			if (status == AppointmentStatus.PAGE_CHANGED) {
 		        saveSnapshot(html);
 		    }
@@ -188,9 +221,9 @@ public class Main {
 	
 	private static void notifyStatusChange(AppointmentStatus status) {
 
-	    String message = getStatusMessage(status);
+	    String message = time() + " " + getStatusMessage(status);
 
-	    System.out.println(message);
+	    //Message for telegram in console: System.out.println(message);
 
 	    try {
 
@@ -198,16 +231,17 @@ public class Main {
 
 	    } catch (IOException e) {
 
-	        System.out.println(
-	                "Ошибка отправки Telegram: " + e.getMessage()
+	        LOGGER.warning(
+	                "TELEGRAM_SEND_ERROR | "
+	                + e.getClass().getSimpleName()
 	        );
 
 	    } catch (InterruptedException e) {
 
 	        Thread.currentThread().interrupt();
 
-	        System.out.println(
-	                "Отправка Telegram была прервана."
+	        LOGGER.warning(
+	                "TELEGRAM_SEND_INTERRUPTED"
 	        );
 	    }
 	}
@@ -234,15 +268,30 @@ public class Main {
 	                StandardCharsets.UTF_8
 	        );
 
-	        System.out.println(
-	                "Snapshot saved: " + file.toAbsolutePath()
+	        LOGGER.info(
+	                "SNAPSHOT_SAVED | " + file.toAbsolutePath()
 	        );
 
 	    } catch (IOException e) {
 
-	        System.out.println(
-	                "Ошибка сохранения snapshot: " + e.getMessage()
+	        LOGGER.warning(
+	                "SNAPSHOT_SAVE_ERROR | "
+	                + e.getClass().getSimpleName()
 	        );
+	    }
+	}
+	
+	private static void logHttpResult(
+	        int httpStatusCode,
+	        AppointmentStatus status) {
+
+	    String message =
+	            "HTTP " + httpStatusCode + " | " + status;
+
+	    if (httpStatusCode >= 200 && httpStatusCode < 300) {
+	        LOGGER.info(message);
+	    } else {
+	        LOGGER.warning(message);
 	    }
 	}
 

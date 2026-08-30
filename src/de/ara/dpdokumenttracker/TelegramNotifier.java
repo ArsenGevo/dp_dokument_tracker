@@ -7,6 +7,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.logging.Logger;
 
 public class TelegramNotifier {
 
@@ -19,6 +20,9 @@ public class TelegramNotifier {
 
     private static final HttpClient HTTP_CLIENT =
             HttpClient.newHttpClient();
+    
+	private static final Logger LOGGER =
+	        TrackerLogger.getLogger();
 
     public static void sendMessage(String text)
             throws IOException, InterruptedException {
@@ -45,8 +49,8 @@ public class TelegramNotifier {
                 HttpResponse.BodyHandlers.ofString()
         );
 
-        System.out.println(
-                "Telegram HTTP Status: " + response.statusCode()
+
+        LOGGER.info("TELEGRAM_SENT | HTTP " + response.statusCode()
         );
     }
 }
