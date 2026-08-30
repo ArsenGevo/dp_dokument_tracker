@@ -11,18 +11,24 @@ import java.util.concurrent.TimeUnit;
 import java.time.LocalTime;
 import java.time.temporal.ChronoUnit;
 import java.time.Duration;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public class Main {
 
-	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";
-	
+	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";	
 	//private static final String URL = "http://127.0.0.1:5500/index.html";
+	
 	
 	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
 	
 	private static final HttpClient HTTP_CLIENT =
 	        HttpClient.newBuilder()
-	                //.version(HttpClient.Version.HTTP_1_1)
+	                
+	        		//.version(HttpClient.Version.HTTP_1_1)
 	                .connectTimeout(Duration.ofSeconds(5))
 	                .build();
 
@@ -31,8 +37,11 @@ public class Main {
 		PAGE_CHANGED, 
 		RATE_LIMITED, 
 		ACCESS_FORBIDDEN,
+		SERVER_ERROR,
+		NETWORK_ERROR,
 		ERROR
 	}
+	
 	private static AppointmentStatus previousStatus = null;
 	
 		
@@ -42,14 +51,27 @@ public class Main {
 	    ScheduledExecutorService scheduler =
 	            Executors.newSingleThreadScheduledExecutor();
 	    
-	    scheduler.scheduleAtFixedRate(Main::checkOnce, 0, 1, TimeUnit.MINUTES);
+	    scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 5, TimeUnit.MINUTES);
+	    //scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
+	    
 		
-		
+	}
+	
+	private static void safeCheckOnce() {
+
+	    try {
+	        checkOnce();
+
+	    } catch (Exception e) {
+
+	        e.printStackTrace();
+	    }
 	}
 	
 	public static void checkOnce() {
 
 		AppointmentStatus status;
+		String html = null;
 
 		try {
 
@@ -62,6 +84,7 @@ public class Main {
 			if (httpStatusCode >= 200 && httpStatusCode < 300) {
 				
 				status = checkStatus(response.body());
+				html = response.body();
 
 			} else if (httpStatusCode == 429) {
 				
@@ -71,6 +94,10 @@ public class Main {
 
 			    status = AppointmentStatus.ACCESS_FORBIDDEN;
 
+			} else if (httpStatusCode >= 500 && httpStatusCode < 600) {
+				
+			status = AppointmentStatus.SERVER_ERROR;
+			
 			} else {
 				
 				status = AppointmentStatus.ERROR;
@@ -78,7 +105,7 @@ public class Main {
 
 		} catch (IOException e) {
 
-			status = AppointmentStatus.ERROR;
+			status = AppointmentStatus.NETWORK_ERROR;
 
 		} catch (InterruptedException e) {
 
@@ -136,16 +163,22 @@ public class Main {
 	        return "DP Dokument: состояние страницы изменилось!";
 
 	    case RATE_LIMITED:
-	        return "DP Dokument: превышение лимита запросов!";
+	        return "DP Dokument: превышение лимита запросов! (HTTP 429)";
 	        
 	    case ACCESS_FORBIDDEN:
 	        return "DP Dokument: доступ запрещён сервером (HTTP 403).";
+	        
+	    case SERVER_ERROR: 
+	    	return "DP Dokument: ошибка сервера (HTTP 500).";
+	    	
+	    case NETWORK_ERROR: 
+	    	return "Oшибка сети или соединения.";
 
 	    case ERROR:
-	        return "DP Dokument: ошибка проверки!";
+	        return "Непредвиденная ошибка программы.";
 
 	    default:
-	        return "DP Dokument: неизвестное состояние.";
+	        return "Неизвестное состояние.";
 	    }
 	}
 	
