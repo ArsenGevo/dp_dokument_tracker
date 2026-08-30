@@ -120,6 +120,9 @@ public class Main {
 		}
 		
 		if (status != previousStatus) {
+			if (status == AppointmentStatus.PAGE_CHANGED) {
+		        saveSnapshot(html);
+		    }
 			notifyStatusChange(status);
 			previousStatus = status;
 		}
@@ -205,6 +208,40 @@ public class Main {
 
 	        System.out.println(
 	                "Отправка Telegram была прервана."
+	        );
+	    }
+	}
+	
+	private static void saveSnapshot(String html) {
+
+	    try {
+
+	        Path directory = Path.of("snapshots");
+
+	        Files.createDirectories(directory);
+
+	        String timestamp = LocalDateTime.now()
+	                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+
+	        String fileName =
+	                timestamp + "_PAGE_CHANGED.html";
+
+	        Path file = directory.resolve(fileName);
+
+	        Files.writeString(
+	                file,
+	                html,
+	                StandardCharsets.UTF_8
+	        );
+
+	        System.out.println(
+	                "Snapshot saved: " + file.toAbsolutePath()
+	        );
+
+	    } catch (IOException e) {
+
+	        System.out.println(
+	                "Ошибка сохранения snapshot: " + e.getMessage()
 	        );
 	    }
 	}
