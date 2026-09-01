@@ -26,7 +26,7 @@ public class TrackerLogger {
 
             FileHandler fileHandler =
                     new FileHandler(
-                    		"logs/tracker.log",
+                    		"logs/tracker-%g.log",
                     		1_000_000,
                     		5,
                     		true
@@ -36,6 +36,8 @@ public class TrackerLogger {
 
             LOGGER.addHandler(fileHandler);
             LOGGER.setLevel(Level.INFO);
+            
+            LOGGER.info("APPLICATION_STARTED");
 
         } catch (IOException e) {
 
