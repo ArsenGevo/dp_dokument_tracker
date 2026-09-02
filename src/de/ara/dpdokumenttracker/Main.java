@@ -20,6 +20,8 @@ import java.util.logging.Logger;
 import java.util.logging.Level;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 
 public class Main {
 
@@ -30,18 +32,32 @@ public class Main {
 	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
 
 	private static final String SERVICES_FORM = "id=\"services\"";
+	
+	private static final CookieManager COOKIE_MANAGER =
+	        new CookieManager(null, CookiePolicy.ACCEPT_ALL);
 
-	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-
-			
+	private static final HttpClient HTTP_CLIENT = 
+			HttpClient.newBuilder()
 			//.version(HttpClient.Version.HTTP_1_1)
+			.cookieHandler(COOKIE_MANAGER)
 			.connectTimeout(Duration.ofSeconds(5))
 			.build();
 
 	private static final Logger LOGGER = TrackerLogger.getLogger();
 
 	private enum AppointmentStatus {
-		FULLY_BOOKED, PAGE_CHANGED, RATE_LIMITED, ACCESS_FORBIDDEN, SERVER_ERROR, NETWORK_ERROR, ERROR
+		FULLY_BOOKED, 
+		PAGE_CHANGED, 
+		RATE_LIMITED, 
+		ACCESS_FORBIDDEN, 
+		SERVER_ERROR, 
+		NETWORK_ERROR, 
+		ERROR
+	}
+	enum PageMode {
+	    BUSY_MESSAGE,
+	    BOOKING_FORM,
+	    UNKNOWN
 	}
 
 	private static AppointmentStatus previousStatus = null;
@@ -50,7 +66,7 @@ public class Main {
 
 		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		 scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 5, TimeUnit.MINUTES);
+		 scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 		 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
@@ -84,6 +100,7 @@ public class Main {
 
 				status = checkStatus(response.body());
 				html = response.body();
+				printAllCsrf(html);
 
 			} else if (httpStatusCode == 429) {
 
@@ -166,11 +183,39 @@ public class Main {
 			    
 			    System.out.println("CSRF: " + csrf);
 			    System.out.println("Center ID: " + centerId);
-			    return AppointmentStatus.SERVER_ERROR;
+			    
+			    
+			    if (csrf != null && centerId != null) {
+			        
+			        try {
+			            checkDays(csrf, centerId);
+
+			        } catch (IOException e) {
+
+			            System.out.println(
+			                    "Ошибка DAYS API: " + e.getMessage()
+			            );
+
+			        } catch (InterruptedException e) {
+
+			            Thread.currentThread().interrupt();
+
+			            System.out.println(
+			                    "DAYS API был прерван"
+			            );
+			        }
+			        
+			    }
+			    
+			    return AppointmentStatus.PAGE_CHANGED;
 			} else {
 				return AppointmentStatus.PAGE_CHANGED;
 			}
 		
+	}
+	
+	private static String normalizeHtml(String html) {
+		return html.replace("&quot;", "\"");
 	}
 	
 	private static boolean isFormMode(String html) {
@@ -178,10 +223,12 @@ public class Main {
 	}
 
 	private static String extractCsrf(String html) {
+		
+		String normalizedHtml = normalizeHtml(html);
 
-		Pattern pattern = Pattern.compile("'csrf'\\s*:\\s*'([^']+)'");
+		Pattern pattern = Pattern.compile("\"csrf\"\\s*:\\s*\"([^\"]+)\"");
 
-		Matcher matcher = pattern.matcher(html);
+		Matcher matcher = pattern.matcher(normalizedHtml);
 
 		if (matcher.find()) {
 			return matcher.group(1);
@@ -191,10 +238,12 @@ public class Main {
 	}
 
 	private static String extractCenterId(String html) {
+		
+		String normalizedHtml = normalizeHtml(html);
 
-		Pattern pattern = Pattern.compile("'center'\\s*:\\s*'([^']+)'");
+		Pattern pattern = Pattern.compile("\"center\"\\s*:\\s*\"([^\"]+)\"");
 
-		Matcher matcher = pattern.matcher(html);
+		Matcher matcher = pattern.matcher(normalizedHtml);
 
 		if (matcher.find()) {
 			return matcher.group(1);
@@ -294,5 +343,170 @@ public class Main {
 		LocalTime now = LocalTime.now();
 		LocalTime time = now.truncatedTo(ChronoUnit.MINUTES);
 		return time;
+	}
+	
+	private static void checkDays(
+	        String csrf,
+	        String centerId
+	) throws IOException, InterruptedException {
+
+	    String boundary =
+	            "----DpTrackerBoundary" + System.currentTimeMillis();
+
+	    String body =
+	            createMultipartBody(boundary, csrf, centerId);
+
+	    HttpRequest request =
+	            HttpRequest.newBuilder()
+	                    .uri(URI.create(URL))
+	                    .header(
+	                            "Content-Type",
+	                            "multipart/form-data; boundary=" + boundary
+	                    )
+	                    .header(
+	                            "Origin",
+	                            "https://munich.pasport.org.ua"
+	                    )
+	                    .header(
+	                            "Referer",
+	                            URL
+	                    )
+	                    .POST(
+	                            HttpRequest.BodyPublishers.ofString(body)
+	                    )
+	                    .build();
+	    
+	    
+	    
+	    
+	    
+	    URI uri = URI.create(URL);
+
+	    System.out.println("COOKIES FOR POST URI:");
+
+	    COOKIE_MANAGER.getCookieStore()
+	            .get(uri)
+	            .forEach(cookie ->
+	                    System.out.println(
+	                            cookie.getName()
+	                            + " | path=" + cookie.getPath()
+	                            + " | secure=" + cookie.getSecure()
+	                    )
+	            );
+
+	    
+	    
+
+	    HttpResponse<String> response =
+	            HTTP_CLIENT.send(
+	                    request,
+	                    HttpResponse.BodyHandlers.ofString()
+	            );
+
+	    System.out.println(
+	            "DAYS API HTTP: " + response.statusCode()
+	    );
+
+	    System.out.println(
+	            "DAYS API RESPONSE: " + response.body()
+	    );
+	}
+	
+	private static String createMultipartBody(
+	        String boundary,
+	        String csrf,
+	        String centerId
+	) {
+
+	    String lineBreak = "\r\n";
+
+	    StringBuilder body = new StringBuilder();
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "form",
+	            "days",
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "ServiceCenterId",
+	            centerId,
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "ServiceId",
+	            "4",
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            csrf,
+	            "1",
+	            lineBreak
+	    );
+
+	    body.append("--")
+	            .append(boundary)
+	            .append("--")
+	            .append(lineBreak);
+
+	    return body.toString();
+	}
+	
+	private static void addFormField(
+	        StringBuilder body,
+	        String boundary,
+	        String name,
+	        String value,
+	        String lineBreak
+	) {
+
+	    body.append("--")
+	            .append(boundary)
+	            .append(lineBreak);
+
+	    body.append(
+	            "Content-Disposition: form-data; name=\""
+	    )
+	            .append(name)
+	            .append("\"")
+	            .append(lineBreak);
+
+	    body.append(lineBreak);
+
+	    body.append(value)
+	            .append(lineBreak);
+	}
+	
+	private static void printAllCsrf(String html) {
+
+	    String normalizedHtml =
+	            html.replace("&quot;", "\"");
+
+	    Pattern pattern =
+	            Pattern.compile("\"csrf\"\\s*:\\s*\"([^\"]+)\"");
+
+	    Matcher matcher = pattern.matcher(normalizedHtml);
+
+	    int number = 1;
+
+	    while (matcher.find()) {
+
+	        System.out.println(
+	                "CSRF #" + number + ": "
+	                + matcher.group(1)
+	        );
+
+	        number++;
+	    }
 	}
 }
