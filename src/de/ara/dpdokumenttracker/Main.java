@@ -46,7 +46,8 @@ public class Main {
 	private static final Logger LOGGER = TrackerLogger.getLogger();
 
 	private enum AppointmentStatus {
-		FULLY_BOOKED, 
+		FULLY_BOOKED,
+		AVAILABLE,
 		PAGE_CHANGED, 
 		RATE_LIMITED, 
 		ACCESS_FORBIDDEN, 
@@ -165,43 +166,54 @@ public class Main {
 
 	private static AppointmentStatus checkStatus(String html) {
 		
+		//MODE A: BUSY_MESSAGE
 		if (html.contains(BUSY_MESSAGE)) {
 			
 			return AppointmentStatus.FULLY_BOOKED; 
 			
-			} else if (isFormMode(html)) {
+			} 
+		
+		//MODE B: BOOKING_FORM
+		if (isFormMode(html)) {
 				
 				LOGGER.info("PAGE_MODE | BOOKING_FORM");
 				
 				String csrf = extractCsrf(html);
 			    String centerId = extractCenterId(html);
 			    
-			    if (csrf != null && centerId != null) {
+			    if (csrf == null || centerId == null) {
+		            return AppointmentStatus.PAGE_CHANGED;
+		        }			    
 			        
 			        try {
-			            checkDays(csrf, centerId);
+			        	
+			        	//API-responce check:
+			           return checkDays(csrf, centerId);
 
 			        } catch (IOException e) {
 
-			            System.out.println(
-			                    "Ошибка DAYS API: " + e.getMessage()
+			        	LOGGER.warning(
+			                    "DAYS_API_NETWORK_ERROR | "
+			                    + e.getMessage()
 			            );
+
+			            return AppointmentStatus.NETWORK_ERROR;
 
 			        } catch (InterruptedException e) {
 
 			            Thread.currentThread().interrupt();
 
-			            System.out.println(
-			                    "DAYS API был прерван"
+			            LOGGER.warning(
+			                    "DAYS_API_INTERRUPTED"
 			            );
-			        }			        
-			    }
-			    
-			    return AppointmentStatus.PAGE_CHANGED;
-			} else {
+
+			            return AppointmentStatus.ERROR;			       			        
+			        }
+		}
+			
+				// UNKNOW PAGE
 				return AppointmentStatus.PAGE_CHANGED;
-			}
-		
+					
 	}
 	
 	private static String normalizeHtml(String html) {
@@ -247,7 +259,7 @@ public class Main {
 		switch (status) {
 
 		case FULLY_BOOKED:
-			return "DP Dokument: Наразі всі місця зайняті.";
+			return "DP Dokument: свободных дней нет.";
 
 		case PAGE_CHANGED:
 			return "DP Dokument: состояние страницы изменилось!";
@@ -266,6 +278,9 @@ public class Main {
 
 		case ERROR:
 			return "Непредвиденная ошибка программы.";
+			
+		case AVAILABLE:
+			return "DP Dokument: появились даты для записи. Перейдите на сайт!";
 
 		default:
 			return "Неизвестное состояние.";
@@ -335,7 +350,7 @@ public class Main {
 		return time;
 	}
 	
-	private static void checkDays(
+	private static AppointmentStatus checkDays(
 	        String csrf,
 	        String centerId
 	) throws IOException, InterruptedException {
@@ -366,7 +381,7 @@ public class Main {
 	                            "application/json, text/plain, */*"
 	                    )
 	                    
-	                    // Required by the backend for the same-origin form request
+	                    // Required by the back-end for the same-origin form request
 	                    .header("sec-fetch-site", "same-origin")
 	                    
 	                    .POST(
@@ -381,6 +396,8 @@ public class Main {
 	                    HttpResponse.BodyHandlers.ofString()
 	            );
 	    
+	    String responseBody = response.body().trim();
+	    
 	    
 	    System.out.println(
 	            "DAYS API HTTP: " + response.statusCode()
@@ -389,6 +406,34 @@ public class Main {
 	    System.out.println(
 	            "DAYS API RESPONSE: " + response.body()
 	    );
+	    
+	    int apiStatusCode = response.statusCode();
+	    
+	    if (apiStatusCode == 429) {
+	        return AppointmentStatus.RATE_LIMITED;
+	    }
+
+	    if (apiStatusCode == 403) {
+	        return AppointmentStatus.ACCESS_FORBIDDEN;
+	    }
+
+	    if (apiStatusCode >= 500 && apiStatusCode < 600) {
+	        return AppointmentStatus.SERVER_ERROR;
+	    }
+	    
+	    if (response.statusCode() == 200) {
+
+	        if (responseBody.equals("{\"days\":[]}")) {
+	            return AppointmentStatus.FULLY_BOOKED;
+	        }
+
+	        if (responseBody.contains("\"days\":[")) {
+	            return AppointmentStatus.AVAILABLE;
+	            
+	        }        
+	    }
+	    return AppointmentStatus.ERROR;
+	    	    	    
 	}
 	
 	private static String createMultipartBody(
