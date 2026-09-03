@@ -32,10 +32,7 @@ public class Main {
 	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
 
 	private static final String SERVICES_FORM = "id=\"services\"";
-	
-	private static final String USER_AGENT =
-	        "DpDokumentTracker/2.0";
-	
+		
 	private static final CookieManager COOKIE_MANAGER =
 	        new CookieManager(null, CookiePolicy.ACCEPT_ALL);
 
@@ -103,7 +100,6 @@ public class Main {
 
 				status = checkStatus(response.body());
 				html = response.body();
-				printAllCsrf(html);
 
 			} else if (httpStatusCode == 429) {
 
@@ -167,26 +163,18 @@ public class Main {
 		return response;
 	}
 
-	/*
-	 * private static AppointmentStatus checkStatus(String html) {
-	 * 
-	 * if (html.contains(BUSY_MESSAGE)) { return AppointmentStatus.FULLY_BOOKED; }
-	 * 
-	 * return AppointmentStatus.PAGE_CHANGED; }
-	 */
 	private static AppointmentStatus checkStatus(String html) {
+		
 		if (html.contains(BUSY_MESSAGE)) {
+			
 			return AppointmentStatus.FULLY_BOOKED; 
+			
 			} else if (isFormMode(html)) {
 				
-				System.out.println("Mode B");
+				LOGGER.info("PAGE_MODE | BOOKING_FORM");
 				
 				String csrf = extractCsrf(html);
 			    String centerId = extractCenterId(html);
-			    
-			    System.out.println("CSRF: " + csrf);
-			    System.out.println("Center ID: " + centerId);
-			    
 			    
 			    if (csrf != null && centerId != null) {
 			        
@@ -206,8 +194,7 @@ public class Main {
 			            System.out.println(
 			                    "DAYS API был прерван"
 			            );
-			        }
-			        
+			        }			        
 			    }
 			    
 			    return AppointmentStatus.PAGE_CHANGED;
@@ -378,71 +365,15 @@ public class Main {
 	                            "Accept",
 	                            "application/json, text/plain, */*"
 	                    )
-	                    //.header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
-	                    //.header("sec-ch-ua", "\"Chromium\";v=\"152\", \"Not?A_Brand\";v=\"24\", \"Google Chrome\";v=\"152\"")
-	                    //.header("sec-ch-ua-mobile", "?0")
-	                    //.header("sec-ch-ua-platform", "\"Windows\"")
-	                    //.header("sec-fetch-dest", "empty")
-	                    .header("sec-fetch-mode", "cors")
-	                    //.header("sec-fetch-site", "same-origin")
+	                    
+	                    // Required by the backend for the same-origin form request
+	                    .header("sec-fetch-site", "same-origin")
+	                    
 	                    .POST(
 	                            HttpRequest.BodyPublishers.ofString(body)
 	                    )
 	                    .build();
-	    
-	    
-	    
-	    
-	    
-	    URI uri = URI.create(URL);
-	    
-	  //session cookie:
-	    COOKIE_MANAGER.getCookieStore()
-        .get(uri)
-        .forEach(cookie ->
-                System.out.println(
-                        cookie.getName() + "=" + cookie.getValue()
-                )
-        );
-	  //session cookie end.
-	    
 
-	    System.out.println("COOKIES FOR POST URI:");
-
-	    COOKIE_MANAGER.getCookieStore()
-	            .get(uri)
-	            .forEach(cookie ->
-	                    System.out.println(
-	                            cookie.getName()
-	                            + " | path=" + cookie.getPath()
-	                            + " | secure=" + cookie.getSecure()
-	                    )
-	            );
-
-	    //cookie header check:	    
-	    var cookieHeaders =
-	            COOKIE_MANAGER.get(
-	                    URI.create(URL),
-	                    request.headers().map()
-	            );
-
-	    boolean cookieHeaderPresent =
-	            cookieHeaders.keySet()
-	                    .stream()
-	                    .anyMatch(
-	                            key -> "Cookie".equalsIgnoreCase(key)
-	                    );
-
-	    System.out.println(
-	            "COOKIE HEADER PRESENT: "
-	            + cookieHeaderPresent
-	    );
-	    //end.
-	    
-	    //BODY check:
-	    System.out.println("MULTIPART BODY:");
-	    System.out.println(body);
-	  //BODY check end.
 
 	    HttpResponse<String> response =
 	            HTTP_CLIENT.send(
@@ -450,26 +381,7 @@ public class Main {
 	                    HttpResponse.BodyHandlers.ofString()
 	            );
 	    
-	    //new session after POST check:
-	    response.headers()
-        .allValues("set-cookie")
-        .forEach(header -> {
-
-            int separator = header.indexOf('=');
-
-            String cookieName =
-                    separator > 0
-                            ? header.substring(0, separator)
-                            : header;
-
-            System.out.println(
-                    "SET-COOKIE FROM POST: "
-                    + cookieName
-            );
-        });
-	    //end.
 	    
-
 	    System.out.println(
 	            "DAYS API HTTP: " + response.statusCode()
 	    );
@@ -553,27 +465,5 @@ public class Main {
 	    body.append(value)
 	            .append(lineBreak);
 	}
-	
-	private static void printAllCsrf(String html) {
 
-	    String normalizedHtml =
-	            html.replace("&quot;", "\"");
-
-	    Pattern pattern =
-	            Pattern.compile("\"csrf\"\\s*:\\s*\"([^\"]+)\"");
-
-	    Matcher matcher = pattern.matcher(normalizedHtml);
-
-	    int number = 1;
-
-	    while (matcher.find()) {
-
-	        System.out.println(
-	                "CSRF #" + number + ": "
-	                + matcher.group(1)
-	        );
-
-	        number++;
-	    }
-	}
 }
