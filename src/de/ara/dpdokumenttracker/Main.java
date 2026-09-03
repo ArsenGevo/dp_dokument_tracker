@@ -35,12 +35,17 @@ public class Main {
 		
 	private static final CookieManager COOKIE_MANAGER =
 	        new CookieManager(null, CookiePolicy.ACCEPT_ALL);
+	
+	private static final Duration REQUEST_TIMEOUT =
+	        Duration.ofSeconds(60);
+	private static final Duration CONNECT_TIMEOUT =
+	        Duration.ofSeconds(5);
 
 	private static final HttpClient HTTP_CLIENT = 
 			HttpClient.newBuilder()
 			//.version(HttpClient.Version.HTTP_1_1)
 			.cookieHandler(COOKIE_MANAGER)
-			.connectTimeout(Duration.ofSeconds(5))
+			.connectTimeout(CONNECT_TIMEOUT)
 			.build();
 
 	private static final Logger LOGGER = TrackerLogger.getLogger();
@@ -156,7 +161,7 @@ public class Main {
 
 	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
 
-		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).timeout(Duration.ofSeconds(10)).GET()
+		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).timeout(REQUEST_TIMEOUT).GET()
 				.build();
 
 		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
@@ -364,6 +369,7 @@ public class Main {
 	    HttpRequest request =
 	            HttpRequest.newBuilder()
 	                    .uri(URI.create(URL))
+	                    .timeout(REQUEST_TIMEOUT)
 	                    .header(
 	                            "Content-Type",
 	                            "multipart/form-data; boundary=" + boundary
