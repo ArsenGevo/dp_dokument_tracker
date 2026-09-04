@@ -52,16 +52,7 @@ public class Main {
 
 	private static final Logger LOGGER = TrackerLogger.getLogger();
 
-	private enum AppointmentStatus {
-		FULLY_BOOKED,
-		AVAILABLE,
-		PAGE_CHANGED, 
-		RATE_LIMITED, 
-		ACCESS_FORBIDDEN, 
-		SERVER_ERROR, 
-		NETWORK_ERROR, 
-		ERROR
-	}
+
 	enum PageMode {
 	    BUSY_MESSAGE,
 	    BOOKING_FORM,
@@ -96,7 +87,7 @@ public class Main {
 
 	public static void checkOnce() {
 
-		AppointmentStatus status;
+		AvailabilityResult result;
 		String html = null;
 
 		try {
@@ -104,40 +95,62 @@ public class Main {
 			HttpResponse<String> response = loadPage();
 
 			int httpStatusCode = response.statusCode();
+			
+			html = response.body();
 
 			if (httpStatusCode >= 200 && httpStatusCode < 300) {
 
-				status = checkStatus(response.body());
-				html = response.body();
+				result = checkStatus(response.body());
 
 			} else if (httpStatusCode == 429) {
 
-				status = AppointmentStatus.RATE_LIMITED;
+				result = new AvailabilityResult(
+	                    AppointmentStatus.RATE_LIMITED,
+	                    List.of()
+	            );
 
 			} else if (httpStatusCode == 403) {
 
-				status = AppointmentStatus.ACCESS_FORBIDDEN;
+				result = new AvailabilityResult(
+	                    AppointmentStatus.ACCESS_FORBIDDEN,
+	                    List.of()
+	            );
 
 			} else if (httpStatusCode >= 500 && httpStatusCode < 600) {
 
-				status = AppointmentStatus.SERVER_ERROR;
+				result = new AvailabilityResult(
+	                    AppointmentStatus.SERVER_ERROR,
+	                    List.of()
+	            );
 
 			} else {
 
-				status = AppointmentStatus.ERROR;
+				result = new AvailabilityResult(
+	                    AppointmentStatus.ERROR,
+	                    List.of()
+	            );
 			}
 
-			logHttpResult(httpStatusCode, status);
+			logHttpResult(httpStatusCode,
+	                result.getStatus()
+			        );
 
 		} catch (IOException e) {
 
-			status = AppointmentStatus.NETWORK_ERROR;
+			result = new AvailabilityResult(
+	                AppointmentStatus.NETWORK_ERROR,
+	                List.of()
+	        );
 
 			LOGGER.log(Level.WARNING, "NETWORK_ERROR | " + e.getClass().getSimpleName());
 		} catch (InterruptedException e) {
 
 			Thread.currentThread().interrupt();
-			status = AppointmentStatus.ERROR;
+
+			 result = new AvailabilityResult(
+		                AppointmentStatus.ERROR,
+		                List.of()
+		        );
 
 			LOGGER.log(Level.WARNING, "Check thread was interrupted", e);
 
@@ -146,8 +159,14 @@ public class Main {
 		catch (Exception e) {
 			// temporally for fix
 			e.printStackTrace();
-			status = AppointmentStatus.ERROR;
+			
+			 result = new AvailabilityResult(
+		                AppointmentStatus.ERROR,
+		                List.of()
+		        );
 		}
+		
+		AppointmentStatus status = result.getStatus();
 
 		if (status != previousStatus) {
 
@@ -156,7 +175,9 @@ public class Main {
 			if (status == AppointmentStatus.PAGE_CHANGED) {
 				saveSnapshot(html);
 			}
+			
 			notifyStatusChange(status);
+			
 			previousStatus = status;
 		}
 
@@ -172,12 +193,15 @@ public class Main {
 		return response;
 	}
 
-	private static AppointmentStatus checkStatus(String html) {
+	private static AvailabilityResult checkStatus(String html) {
 		
 		//MODE A: BUSY_MESSAGE
 		if (html.contains(BUSY_MESSAGE)) {
 			
-			return AppointmentStatus.FULLY_BOOKED; 
+			return new AvailabilityResult(
+		            AppointmentStatus.FULLY_BOOKED,
+		            List.of()
+		    ); 
 			
 			} 
 		
@@ -190,7 +214,10 @@ public class Main {
 			    String centerId = extractCenterId(html);
 			    
 			    if (csrf == null || centerId == null) {
-		            return AppointmentStatus.PAGE_CHANGED;
+		            return new AvailabilityResult(
+		                    AppointmentStatus.PAGE_CHANGED,
+		                    List.of()
+		            );
 		        }			    
 			        
 			        try {
@@ -202,10 +229,13 @@ public class Main {
 
 			        	LOGGER.warning(
 			                    "DAYS_API_NETWORK_ERROR | "
-			                    + e.getMessage()
+			                    + e.getClass().getSimpleName()
 			            );
 
-			            return AppointmentStatus.NETWORK_ERROR;
+			            return new AvailabilityResult(
+			                    AppointmentStatus.NETWORK_ERROR,
+			                    List.of()
+			            );
 
 			        } catch (InterruptedException e) {
 
@@ -215,12 +245,18 @@ public class Main {
 			                    "DAYS_API_INTERRUPTED"
 			            );
 
-			            return AppointmentStatus.ERROR;			       			        
+			            return new AvailabilityResult(
+			                    AppointmentStatus.ERROR,
+			                    List.of()
+	                    );
 			        }
 		}
 			
 				// UNKNOW PAGE
-				return AppointmentStatus.PAGE_CHANGED;
+				return new AvailabilityResult(
+				        AppointmentStatus.PAGE_CHANGED,
+				        List.of()
+				);
 					
 	}
 	
@@ -358,7 +394,7 @@ public class Main {
 		return time;
 	}
 	
-	private static AppointmentStatus checkDays(
+	private static AvailabilityResult checkDays(
 	        String csrf,
 	        String centerId
 	) throws IOException, InterruptedException {
@@ -419,15 +455,24 @@ public class Main {
 	    int apiStatusCode = response.statusCode();
 	    
 	    if (apiStatusCode == 429) {
-	        return AppointmentStatus.RATE_LIMITED;
+	        return new AvailabilityResult(
+	        		AppointmentStatus.RATE_LIMITED,
+	                List.of()
+	        		);
 	    }
 
 	    if (apiStatusCode == 403) {
-	        return AppointmentStatus.ACCESS_FORBIDDEN;
+	        return new AvailabilityResult(
+	                AppointmentStatus.ACCESS_FORBIDDEN,
+	                List.of()
+	        );
 	    }
 
 	    if (apiStatusCode >= 500 && apiStatusCode < 600) {
-	        return AppointmentStatus.SERVER_ERROR;
+	        return new AvailabilityResult(
+	                AppointmentStatus.SERVER_ERROR,
+	                List.of()
+	        );
 	    }
 	    
 	    if (response.statusCode() == 200) {
@@ -435,7 +480,10 @@ public class Main {
 	        if (responseBody.equals("{\"days\":[]}")) {
 	        	
 	        	LOGGER.info("DAYS_API | days=0");
-	            return AppointmentStatus.FULLY_BOOKED;
+	            return new AvailabilityResult(
+	                    AppointmentStatus.FULLY_BOOKED,
+	                    List.of()
+                );
 	        }
 	        
 	        if (!responseBody.contains("\"days\"")) {
@@ -444,7 +492,10 @@ public class Main {
 	                    "DAYS_API | UNEXPECTED_RESPONSE"
 	            );
 
-	            return AppointmentStatus.ERROR;
+	            return new AvailabilityResult(
+	                    AppointmentStatus.ERROR,
+	                    List.of()
+	            );
 	        }
 	        
 	        List<String> availableDates =
@@ -459,14 +510,20 @@ public class Main {
 	                    + String.join(", ", availableDates)
 	            );
 
-	            return AppointmentStatus.AVAILABLE;
+	            return new AvailabilityResult(
+	                    AppointmentStatus.AVAILABLE,
+	                    availableDates
+	            );
 	        }
 
 	        LOGGER.warning(
 	                "DAYS_API | UNKNOWN_RESPONSE"
 	        );        
 	    }
-	    return AppointmentStatus.ERROR;
+	    return new AvailabilityResult(
+                AppointmentStatus.ERROR,
+                List.of()
+        );
 	    	    	    
 	}
 	
