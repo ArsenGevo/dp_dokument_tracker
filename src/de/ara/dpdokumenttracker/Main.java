@@ -22,6 +22,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Main {
 
@@ -75,6 +77,7 @@ public class Main {
 		 scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 		 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
+
 
 	}
 
@@ -264,7 +267,7 @@ public class Main {
 		switch (status) {
 
 		case FULLY_BOOKED:
-			return "DP Dokument: свободных дней нет.";
+			return "DP Dokument: В данный момент нет опубликованных дат для записи.";
 
 		case PAGE_CHANGED:
 			return "DP Dokument: состояние страницы изменилось!";
@@ -430,13 +433,38 @@ public class Main {
 	    if (response.statusCode() == 200) {
 
 	        if (responseBody.equals("{\"days\":[]}")) {
+	        	
+	        	LOGGER.info("DAYS_API | days=0");
 	            return AppointmentStatus.FULLY_BOOKED;
 	        }
+	        
+	        if (!responseBody.contains("\"days\"")) {
 
-	        if (responseBody.contains("\"days\":[")) {
+	            LOGGER.warning(
+	                    "DAYS_API | UNEXPECTED_RESPONSE"
+	            );
+
+	            return AppointmentStatus.ERROR;
+	        }
+	        
+	        List<String> availableDates =
+	                extractAvailableDates(responseBody);
+	        
+	        if (!availableDates.isEmpty()) {
+
+	            LOGGER.info(
+	                    "DAYS_API | days="
+	                    + availableDates.size()
+	                    + " | "
+	                    + String.join(", ", availableDates)
+	            );
+
 	            return AppointmentStatus.AVAILABLE;
-	            
-	        }        
+	        }
+
+	        LOGGER.warning(
+	                "DAYS_API | UNKNOWN_RESPONSE"
+	        );        
 	    }
 	    return AppointmentStatus.ERROR;
 	    	    	    
@@ -516,5 +544,22 @@ public class Main {
 	    body.append(value)
 	            .append(lineBreak);
 	}
+	
+	private static List<String> extractAvailableDates(String responseBody) {
 
+	    List<String> dates = new ArrayList<>();
+
+	    Pattern pattern =
+	            Pattern.compile("\"date\"\\s*:\\s*\"([^\"]+)\"");
+
+	    Matcher matcher = pattern.matcher(responseBody);
+
+	    while (matcher.find()) {
+	        dates.add(matcher.group(1));
+	    }
+
+	    return dates;
+	}
+	
+	
 }
