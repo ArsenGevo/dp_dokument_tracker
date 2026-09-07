@@ -176,7 +176,7 @@ public class Main {
 				saveSnapshot(html);
 			}
 			
-			notifyStatusChange(status);
+			notifyStatusChange(result);
 			
 			previousStatus = status;
 		}
@@ -331,9 +331,33 @@ public class Main {
 		}
 	}
 
-	private static void notifyStatusChange(AppointmentStatus status) {
+	private static void notifyStatusChange(AvailabilityResult result) {
+		
+		AppointmentStatus status = result.getStatus();
+		
+		List<String> availableDates = result.getAvailableDates();
+		
+		String message;
+		
+		if (status == AppointmentStatus.AVAILABLE) {
+			if (availableDates.isEmpty()) {
+		        message =
+		                time()
+		                + " 🔥 Є доступні дати для запису. Перейдіть на сайт.";
+		    } else {
 
-		String message = time() + " " + getStatusMessage(status);
+		        String datesText =
+		                String.join("\n", availableDates);
+
+		        message =
+		                time()
+		                + " 🔥 Є доступні дати для запису:\n"
+		                + datesText;
+		    }
+		} else {
+			message = time()
+					+ " " + getStatusMessage(status);
+		}
 
 		// Message for telegram in console: System.out.println(message);
 
