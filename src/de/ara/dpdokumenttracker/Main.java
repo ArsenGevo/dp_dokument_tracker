@@ -60,17 +60,19 @@ public class Main {
 	}
 
 	private static AppointmentStatus previousStatus = null;
+	
+	private static List<String> previousAvailableDates = List.of();
 
 	public static void main(String[] args) {
 
 		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
 		 scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
-		 
+
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
 
-	}
+	}	
 
 	private static void safeCheckOnce() {
 
@@ -167,7 +169,44 @@ public class Main {
 		}
 		
 		AppointmentStatus status = result.getStatus();
+		List<String> currentDates = result.getAvailableDates();
+		
+		boolean statusChanged =
+		        status != previousStatus;
+		
+		boolean datesChanged =
+		        status == AppointmentStatus.AVAILABLE
+		        && !currentDates.equals(previousAvailableDates);
+		
+		if (statusChanged || datesChanged) {
 
+		    if (statusChanged) {
+
+		        LOGGER.info(
+		                "STATUS_CHANGE | "
+		                + previousStatus
+		                + " -> "
+		                + status
+		        );
+		    }
+		    
+		    if (datesChanged) {
+
+		        LOGGER.info(
+		                "AVAILABLE_DATES_CHANGE | "
+		                + previousAvailableDates
+		                + " -> "
+		                + currentDates
+		        );
+		    }
+		    
+		    if (status == AppointmentStatus.PAGE_CHANGED) {
+		        saveSnapshot(html);
+		    }
+		   
+		   
+		
+		/* alt:
 		if (status != previousStatus) {
 
 			LOGGER.info("STATUS_CHANGE | " + previousStatus + " -> " + status);
@@ -175,10 +214,12 @@ public class Main {
 			if (status == AppointmentStatus.PAGE_CHANGED) {
 				saveSnapshot(html);
 			}
+			*/
 			
 			notifyStatusChange(result);
 			
 			previousStatus = status;
+			previousAvailableDates = List.copyOf(currentDates);
 		}
 
 	}
