@@ -24,6 +24,8 @@ import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.util.ArrayList;
 import java.util.List;
+import java.time.Duration;
+import java.time.Instant;
 
 public class Main {
 
@@ -62,18 +64,30 @@ public class Main {
 	private static AppointmentStatus previousStatus = null;
 	
 	private static List<String> previousAvailableDates = List.of();
+	
+	private static int consecutiveForbiddenCount = 0;
+	
+	private static final int FORBIDDEN_BACKOFF_THRESHOLD = 2;
+	private static final Duration FORBIDDEN_BACKOFF_DURATION =
+	        Duration.ofHours(30);
+
+	private static Instant forbiddenBackoffUntil =
+	        Instant.EPOCH;
+	
+	private static boolean forbiddenAlertSent = false;
+	
+	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
 
-		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		 scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
-
-	}	
-
+	}
+	
 	private static void safeCheckOnce() {
 
 		try {
@@ -86,11 +100,21 @@ public class Main {
 			LOGGER.log(Level.SEVERE, "Unexpected error in scheduled check", e);
 		}
 	}
-
+	
 	public static void checkOnce() {
 
 		AvailabilityResult result;
 		String html = null;
+		
+		if (Instant.now().isBefore(forbiddenBackoffUntil)) {
+
+		    LOGGER.info(
+		            "BACKOFF_ACTIVE | until="
+		            + forbiddenBackoffUntil
+		    );
+
+		    return;
+		}
 
 		try {
 
@@ -169,7 +193,63 @@ public class Main {
 		}
 		
 		AppointmentStatus status = result.getStatus();
-		List<String> currentDates = result.getAvailableDates();
+		
+		// 403 http responce backoff: 
+		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {
+			
+			consecutiveForbiddenCount++;
+
+		    LOGGER.warning(
+		            "ACCESS_FORBIDDEN | consecutive="
+		            + consecutiveForbiddenCount
+		    );
+		    
+		    if (consecutiveForbiddenCount
+		            >= FORBIDDEN_BACKOFF_THRESHOLD) {
+		    	
+		    	forbiddenBackoffUntil =
+		                Instant.now()
+		                .plus(FORBIDDEN_BACKOFF_DURATION);
+
+		        LOGGER.warning(
+		                "ACCESS_FORBIDDEN | BACKOFF_STARTED | until="
+		                + forbiddenBackoffUntil
+		        );
+		        
+		        if (!forbiddenAlertSent) {
+
+		            notifyStatusChange(result);
+
+		            forbiddenAlertSent = true;
+		        }
+		    }
+		    return;
+		}
+		
+				
+		boolean healthyStatus =
+		        status == AppointmentStatus.FULLY_BOOKED
+		        || status == AppointmentStatus.AVAILABLE
+		        || status == AppointmentStatus.PAGE_CHANGED;
+
+		if (healthyStatus) {
+
+		    if (consecutiveForbiddenCount > 0) {
+
+		        LOGGER.info(
+		                "ACCESS_RESTORED | after="
+		                + consecutiveForbiddenCount
+		                + " forbidden responses"
+		        );
+		    }
+
+		    forbiddenAlertSent = false;
+		}
+		
+		consecutiveForbiddenCount = 0;
+		forbiddenBackoffUntil = Instant.EPOCH; // no active backoff
+		
+		List<String> currentDates = result.getAvailableDates();		
 		
 		boolean statusChanged =
 		        status != previousStatus;
@@ -204,17 +284,6 @@ public class Main {
 		        saveSnapshot(html);
 		    }
 		   
-		   
-		
-		/* alt:
-		if (status != previousStatus) {
-
-			LOGGER.info("STATUS_CHANGE | " + previousStatus + " -> " + status);
-
-			if (status == AppointmentStatus.PAGE_CHANGED) {
-				saveSnapshot(html);
-			}
-			*/
 			
 			notifyStatusChange(result);
 			
