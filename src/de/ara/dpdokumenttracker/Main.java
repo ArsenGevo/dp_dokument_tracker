@@ -69,9 +69,13 @@ public class Main {
 	
 	private static final int FORBIDDEN_BACKOFF_THRESHOLD = 2;
 	private static final Duration FORBIDDEN_BACKOFF_DURATION =
-	        Duration.ofHours(30);
-
+	        Duration.ofMinutes(30);
 	private static Instant forbiddenBackoffUntil =
+	        Instant.EPOCH;
+	
+	private static final Duration RATE_LIMIT_BACKOFF_DURATION =
+	        Duration.ofMinutes(30);
+	private static Instant rateLimitBackoffUntil =
 	        Instant.EPOCH;
 	
 	private static boolean forbiddenAlertSent = false;
@@ -79,13 +83,44 @@ public class Main {
 	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
+		
+		testRateLimitRecovery();
 
-		scheduler = Executors.newSingleThreadScheduledExecutor();
+		//scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
+	}
+	
+	private static void testRateLimitRecovery() {
+
+	    rateLimitBackoffUntil =
+	            Instant.now().plus(Duration.ofSeconds(10));
+
+	    AppointmentStatus status =
+	            AppointmentStatus.NETWORK_ERROR;
+
+	    boolean healthyStatus =
+	            status == AppointmentStatus.FULLY_BOOKED
+	            || status == AppointmentStatus.AVAILABLE
+	            || status == AppointmentStatus.PAGE_CHANGED;
+
+	    if (healthyStatus) {
+
+	        if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
+
+	            LOGGER.info("RATE_LIMIT_RESTORED");
+
+	            rateLimitBackoffUntil = Instant.EPOCH;
+	        }
+	    }
+
+	    System.out.println(
+	            "rateLimitBackoffUntil = "
+	            + rateLimitBackoffUntil
+	    );
 	}
 	
 	private static void safeCheckOnce() {
@@ -111,6 +146,16 @@ public class Main {
 		    LOGGER.info(
 		            "BACKOFF_ACTIVE | until="
 		            + forbiddenBackoffUntil
+		    );
+
+		    return;
+		}
+		
+		if (Instant.now().isBefore(rateLimitBackoffUntil)) {
+
+		    LOGGER.info(
+		            "RATE_LIMIT_BACKOFF_ACTIVE | until="
+		            + rateLimitBackoffUntil
 		    );
 
 		    return;
@@ -242,12 +287,46 @@ public class Main {
 		                + " forbidden responses"
 		        );
 		    }
+		    
+		    if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
+
+		        LOGGER.info("RATE_LIMIT_RESTORED");
+
+		        rateLimitBackoffUntil = Instant.EPOCH;
+		    }
+		    
+		    if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
+
+		        LOGGER.info("RATE_LIMIT_RESTORED");
+
+		        rateLimitBackoffUntil = Instant.EPOCH;
+		    }
 
 		    forbiddenAlertSent = false;
 		}
 		
 		consecutiveForbiddenCount = 0;
 		forbiddenBackoffUntil = Instant.EPOCH; // no active backoff
+		
+		// 429 http responce backoff: 
+		if (status == AppointmentStatus.RATE_LIMITED) {
+
+		    rateLimitBackoffUntil =
+		            Instant.now()
+		            .plus(RATE_LIMIT_BACKOFF_DURATION);
+
+		    LOGGER.warning(
+		            "RATE_LIMITED | BACKOFF_STARTED | until="
+		            + rateLimitBackoffUntil
+		    );
+
+		    return;
+		}
+		
+		
+		if (isTechnicalFailure(status)) {
+		    return;
+		}
 		
 		List<String> currentDates = result.getAvailableDates();		
 		
@@ -368,6 +447,16 @@ public class Main {
 				        List.of()
 				);
 					
+	}
+	
+	private static boolean isTechnicalFailure(
+	        AppointmentStatus status) {
+
+	    return status == AppointmentStatus.ACCESS_FORBIDDEN
+	            || status == AppointmentStatus.NETWORK_ERROR
+	            || status == AppointmentStatus.RATE_LIMITED
+	            || status == AppointmentStatus.SERVER_ERROR
+	            || status == AppointmentStatus.ERROR;
 	}
 	
 	private static String normalizeHtml(String html) {
