@@ -224,35 +224,8 @@ public class Main {
 		// HTTP 403 response backoff: 
 		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {
 			
-			consecutiveTechnicalFailureCount = 0;
-			technicalFailureAlertSent = false;
+			handleAccessForbidden(result);
 			
-			consecutiveForbiddenCount++;
-
-		    LOGGER.warning(
-		            "ACCESS_FORBIDDEN | consecutive="
-		            + consecutiveForbiddenCount
-		    );
-		    
-		    if (consecutiveForbiddenCount
-		            >= FORBIDDEN_BACKOFF_THRESHOLD) {
-		    	
-		    	forbiddenBackoffUntil =
-		                Instant.now()
-		                .plus(FORBIDDEN_BACKOFF_DURATION);
-
-		        LOGGER.warning(
-		                "ACCESS_FORBIDDEN | BACKOFF_STARTED | until="
-		                + forbiddenBackoffUntil
-		        );
-		        
-		        if (!forbiddenAlertSent) {
-
-		            notifyStatusChange(result);
-
-		            forbiddenAlertSent = true;
-		        }
-		    }
 		    return;
 		}
 		
@@ -393,6 +366,40 @@ public class Main {
 			previousAvailableDates = List.copyOf(currentDates);
 		}
 
+	}
+	
+	private static void handleAccessForbidden(AvailabilityResult result) {
+		
+		consecutiveTechnicalFailureCount = 0;
+		technicalFailureAlertSent = false;
+		
+		consecutiveForbiddenCount++;
+
+	    LOGGER.warning(
+	            "ACCESS_FORBIDDEN | consecutive="
+	            + consecutiveForbiddenCount
+	    );
+	    
+	    if (consecutiveForbiddenCount
+	            >= FORBIDDEN_BACKOFF_THRESHOLD) {
+	    	
+	    	forbiddenBackoffUntil =
+	                Instant.now()
+	                .plus(FORBIDDEN_BACKOFF_DURATION);
+
+	        LOGGER.warning(
+	                "ACCESS_FORBIDDEN | BACKOFF_STARTED | until="
+	                + forbiddenBackoffUntil
+	        );
+	        
+	        if (!forbiddenAlertSent) {
+
+	            notifyStatusChange(result);
+
+	            forbiddenAlertSent = true;
+	        }
+	    }
+		
 	}
 
 	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
