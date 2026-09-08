@@ -79,48 +79,20 @@ public class Main {
 	        Instant.EPOCH;
 	
 	private static boolean forbiddenAlertSent = false;
+	private static boolean rateLimitAlertSent = false;
 	
 	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
+	
 		
-		testRateLimitRecovery();
 
-		//scheduler = Executors.newSingleThreadScheduledExecutor();
+		scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
-	}
-	
-	private static void testRateLimitRecovery() {
-
-	    rateLimitBackoffUntil =
-	            Instant.now().plus(Duration.ofSeconds(10));
-
-	    AppointmentStatus status =
-	            AppointmentStatus.NETWORK_ERROR;
-
-	    boolean healthyStatus =
-	            status == AppointmentStatus.FULLY_BOOKED
-	            || status == AppointmentStatus.AVAILABLE
-	            || status == AppointmentStatus.PAGE_CHANGED;
-
-	    if (healthyStatus) {
-
-	        if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
-
-	            LOGGER.info("RATE_LIMIT_RESTORED");
-
-	            rateLimitBackoffUntil = Instant.EPOCH;
-	        }
-	    }
-
-	    System.out.println(
-	            "rateLimitBackoffUntil = "
-	            + rateLimitBackoffUntil
-	    );
 	}
 	
 	private static void safeCheckOnce() {
@@ -228,18 +200,23 @@ public class Main {
 		}
 
 		catch (Exception e) {
-			// temporally for fix
-			e.printStackTrace();
-			
+
 			 result = new AvailabilityResult(
 		                AppointmentStatus.ERROR,
 		                List.of()
 		        );
+			 
+			 LOGGER.log(
+			            Level.WARNING,
+			            "UNEXPECTED_ERROR | "
+			            + e.getClass().getSimpleName(),
+			            e
+			    );
 		}
 		
 		AppointmentStatus status = result.getStatus();
 		
-		// 403 http responce backoff: 
+		// HTTP 403 response backoff: 
 		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {
 			
 			consecutiveForbiddenCount++;
@@ -272,12 +249,12 @@ public class Main {
 		}
 		
 				
-		boolean healthyStatus =
+		boolean successfulCheck =
 		        status == AppointmentStatus.FULLY_BOOKED
 		        || status == AppointmentStatus.AVAILABLE
 		        || status == AppointmentStatus.PAGE_CHANGED;
 
-		if (healthyStatus) {
+		if (successfulCheck) {
 
 		    if (consecutiveForbiddenCount > 0) {
 
@@ -295,20 +272,14 @@ public class Main {
 		        rateLimitBackoffUntil = Instant.EPOCH;
 		    }
 		    
-		    if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
-
-		        LOGGER.info("RATE_LIMIT_RESTORED");
-
-		        rateLimitBackoffUntil = Instant.EPOCH;
-		    }
-
+		    rateLimitAlertSent = false;
 		    forbiddenAlertSent = false;
 		}
 		
 		consecutiveForbiddenCount = 0;
-		forbiddenBackoffUntil = Instant.EPOCH; // no active backoff
+		forbiddenBackoffUntil = Instant.EPOCH; 
 		
-		// 429 http responce backoff: 
+		// HTTP 429 response backoff: 
 		if (status == AppointmentStatus.RATE_LIMITED) {
 
 		    rateLimitBackoffUntil =
@@ -319,6 +290,13 @@ public class Main {
 		            "RATE_LIMITED | BACKOFF_STARTED | until="
 		            + rateLimitBackoffUntil
 		    );
+		    
+		    if (!rateLimitAlertSent) {
+
+		        notifyStatusChange(result);
+
+		        rateLimitAlertSent = true;
+		    }
 
 		    return;
 		}
