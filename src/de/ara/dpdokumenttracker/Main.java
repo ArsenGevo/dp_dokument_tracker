@@ -72,21 +72,26 @@ public class Main {
 	        Duration.ofMinutes(30);
 	private static Instant forbiddenBackoffUntil =
 	        Instant.EPOCH;
+	private static boolean forbiddenAlertSent = false;
 	
 	private static final Duration RATE_LIMIT_BACKOFF_DURATION =
 	        Duration.ofMinutes(30);
 	private static Instant rateLimitBackoffUntil =
 	        Instant.EPOCH;
-	
-	private static boolean forbiddenAlertSent = false;
 	private static boolean rateLimitAlertSent = false;
+	
+	private static final int TECHNICAL_FAILURE_ALERT_THRESHOLD = 3;
+	private static int consecutiveTechnicalFailureCount = 0;
+	private static boolean technicalFailureAlertSent = false;
+	
+	
+
 	
 	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
-	
-		
 
+		
 		scheduler = Executors.newSingleThreadScheduledExecutor();
 
 		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
@@ -219,6 +224,9 @@ public class Main {
 		// HTTP 403 response backoff: 
 		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {
 			
+			consecutiveTechnicalFailureCount = 0;
+			technicalFailureAlertSent = false;
+			
 			consecutiveForbiddenCount++;
 
 		    LOGGER.warning(
@@ -272,8 +280,20 @@ public class Main {
 		        rateLimitBackoffUntil = Instant.EPOCH;
 		    }
 		    
+		    if (consecutiveTechnicalFailureCount > 0) {
+
+		        LOGGER.info(
+		                "TECHNICAL_FAILURE_RESTORED | after="
+		                + consecutiveTechnicalFailureCount
+		                + " failed checks"
+		        );
+		    }
+		    
 		    rateLimitAlertSent = false;
 		    forbiddenAlertSent = false;
+		    
+		    consecutiveTechnicalFailureCount = 0;
+		    technicalFailureAlertSent = false;
 		}
 		
 		consecutiveForbiddenCount = 0;
@@ -281,6 +301,9 @@ public class Main {
 		
 		// HTTP 429 response backoff: 
 		if (status == AppointmentStatus.RATE_LIMITED) {
+			
+			consecutiveTechnicalFailureCount = 0;
+			technicalFailureAlertSent = false;
 
 		    rateLimitBackoffUntil =
 		            Instant.now()
@@ -301,6 +324,28 @@ public class Main {
 		    return;
 		}
 		
+		if (isGeneralTechnicalFailure(status)) {
+
+		    consecutiveTechnicalFailureCount++;
+
+		    LOGGER.warning(
+		            "TECHNICAL_FAILURE | status="
+		            + status
+		            + " | consecutive="
+		            + consecutiveTechnicalFailureCount
+		    );
+		    
+		    if (consecutiveTechnicalFailureCount
+		            >= TECHNICAL_FAILURE_ALERT_THRESHOLD
+		            && !technicalFailureAlertSent) {
+
+		        notifyStatusChange(result);
+
+		        technicalFailureAlertSent = true;
+		    }
+
+		    return;
+		}
 		
 		if (isTechnicalFailure(status)) {
 		    return;
@@ -433,6 +478,14 @@ public class Main {
 	    return status == AppointmentStatus.ACCESS_FORBIDDEN
 	            || status == AppointmentStatus.NETWORK_ERROR
 	            || status == AppointmentStatus.RATE_LIMITED
+	            || status == AppointmentStatus.SERVER_ERROR
+	            || status == AppointmentStatus.ERROR;
+	}
+	
+	private static boolean isGeneralTechnicalFailure(
+	        AppointmentStatus status) {
+
+	    return status == AppointmentStatus.NETWORK_ERROR
 	            || status == AppointmentStatus.SERVER_ERROR
 	            || status == AppointmentStatus.ERROR;
 	}
