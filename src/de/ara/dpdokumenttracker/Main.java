@@ -115,122 +115,195 @@ public class Main {
 	
 	public static void checkOnce() {
 
-		AvailabilityResult result;
-		String html = null;
-		
-		if (Instant.now().isBefore(forbiddenBackoffUntil)) {
-
-		    LOGGER.info(
-		            "BACKOFF_ACTIVE | until="
-		            + forbiddenBackoffUntil
-		    );
-
+		if (isBackoffActive()) {
 		    return;
 		}
 		
-		if (Instant.now().isBefore(rateLimitBackoffUntil)) {
+		CheckExecutionResult executionResult =
+		        performCheck();
 
-		    LOGGER.info(
-		            "RATE_LIMIT_BACKOFF_ACTIVE | until="
-		            + rateLimitBackoffUntil
-		    );
+		AvailabilityResult result =
+		        executionResult.getResult();
 
+		String html =
+		        executionResult.getHtml();
+		
+		AppointmentStatus status = result.getStatus();
+		
+		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {			
+			handleAccessForbidden(result);			
 		    return;
 		}
+		
+		consecutiveForbiddenCount = 0;
+		forbiddenBackoffUntil = Instant.EPOCH;	
 
-		try {
-
-			HttpResponse<String> response = loadPage();
-
-			int httpStatusCode = response.statusCode();
+		if (status == AppointmentStatus.RATE_LIMITED) {
 			
-			html = response.body();
+			handleRateLimited(result);
 
-			if (httpStatusCode >= 200 && httpStatusCode < 300) {
+		    return;
+		}
+		
+		if (isGeneralTechnicalFailure(status)) {
 
-				result = checkStatus(response.body());
+			handleGeneralTechnicalFailure(result);
 
-			} else if (httpStatusCode == 429) {
+		    return;
+		}
+		
+		if (isTechnicalFailure(status)) {
+		    return;
+		}
+		
+		handleSuccessfulCheck(status);
+		
+		handleStateChange(
+				result,
+				html
+		);
 
-				result = new AvailabilityResult(
+	}
+	
+	private static boolean isBackoffActive() {
+
+	    if (Instant.now().isBefore(forbiddenBackoffUntil)) {
+
+	        LOGGER.info(
+	                "BACKOFF_ACTIVE | until="
+	                + forbiddenBackoffUntil
+	        );
+
+	        return true;
+	    }
+
+	    if (Instant.now().isBefore(rateLimitBackoffUntil)) {
+
+	        LOGGER.info(
+	                "RATE_LIMIT_BACKOFF_ACTIVE | until="
+	                + rateLimitBackoffUntil
+	        );
+
+	        return true;
+	    }
+
+	    return false;
+	}
+	
+	private static CheckExecutionResult performCheck() {
+
+	    String html = null;
+
+	    try {
+
+	        HttpResponse<String> response = loadPage();
+
+	        int httpStatusCode = response.statusCode();
+	        html = response.body();
+
+	        AvailabilityResult result;
+
+	        if (httpStatusCode >= 200 && httpStatusCode < 300) {
+
+	            result = checkStatus(html);
+
+	        } else if (httpStatusCode == 429) {
+
+	            result = new AvailabilityResult(
 	                    AppointmentStatus.RATE_LIMITED,
 	                    List.of()
 	            );
 
-			} else if (httpStatusCode == 403) {
+	        } else if (httpStatusCode == 403) {
 
-				result = new AvailabilityResult(
+	            result = new AvailabilityResult(
 	                    AppointmentStatus.ACCESS_FORBIDDEN,
 	                    List.of()
 	            );
 
-			} else if (httpStatusCode >= 500 && httpStatusCode < 600) {
+	        } else if (httpStatusCode >= 500
+	                && httpStatusCode < 600) {
 
-				result = new AvailabilityResult(
+	            result = new AvailabilityResult(
 	                    AppointmentStatus.SERVER_ERROR,
 	                    List.of()
 	            );
 
-			} else {
+	        } else {
 
-				result = new AvailabilityResult(
+	            result = new AvailabilityResult(
 	                    AppointmentStatus.ERROR,
 	                    List.of()
 	            );
-			}
+	        }
 
-			logHttpResult(httpStatusCode,
+	        logHttpResult(
+	                httpStatusCode,
 	                result.getStatus()
-			        );
-
-		} catch (IOException e) {
-
-			result = new AvailabilityResult(
-	                AppointmentStatus.NETWORK_ERROR,
-	                List.of()
 	        );
 
-			LOGGER.log(Level.WARNING, "NETWORK_ERROR | " + e.getClass().getSimpleName());
-		} catch (InterruptedException e) {
+	        return new CheckExecutionResult(
+	                result,
+	                html
+	        );
 
-			Thread.currentThread().interrupt();
+	    } catch (IOException e) {
 
-			 result = new AvailabilityResult(
-		                AppointmentStatus.ERROR,
-		                List.of()
-		        );
+	        LOGGER.log(
+	                Level.WARNING,
+	                "NETWORK_ERROR | "
+	                + e.getClass().getSimpleName()
+	        );
 
-			LOGGER.log(Level.WARNING, "Check thread was interrupted", e);
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.NETWORK_ERROR,
+	                        List.of()
+	                ),
+	                html
+	        );
 
-		}
+	    } catch (InterruptedException e) {
 
-		catch (Exception e) {
+	        Thread.currentThread().interrupt();
 
-			 result = new AvailabilityResult(
-		                AppointmentStatus.ERROR,
-		                List.of()
-		        );
-			 
-			 LOGGER.log(
-			            Level.WARNING,
-			            "UNEXPECTED_ERROR | "
-			            + e.getClass().getSimpleName(),
-			            e
-			    );
-		}
+	        LOGGER.log(
+	                Level.WARNING,
+	                "Check thread was interrupted",
+	                e
+	        );
+
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.ERROR,
+	                        List.of()
+	                ),
+	                html
+	        );
+
+	    } catch (Exception e) {
+
+	        LOGGER.log(
+	                Level.WARNING,
+	                "UNEXPECTED_ERROR | "
+	                + e.getClass().getSimpleName(),
+	                e
+	        );
+
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.ERROR,
+	                        List.of()
+	                ),
+	                html
+	        );
+	    }
+	}
+	
+	private static void handleSuccessfulCheck(
+	        AppointmentStatus status) {
 		
-		AppointmentStatus status = result.getStatus();
-		
-		// HTTP 403 response backoff: 
-		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {
-			
-			handleAccessForbidden(result);
-			
-		    return;
-		}
-		
-				
-		boolean successfulCheck =
+				boolean successfulCheck =
 		        status == AppointmentStatus.FULLY_BOOKED
 		        || status == AppointmentStatus.AVAILABLE
 		        || status == AppointmentStatus.PAGE_CHANGED;
@@ -269,13 +342,36 @@ public class Main {
 		    technicalFailureAlertSent = false;
 		}
 		
-		consecutiveForbiddenCount = 0;
-		forbiddenBackoffUntil = Instant.EPOCH; 
+	}
+	
+	private static void handleGeneralTechnicalFailure(
+	        AvailabilityResult result) {
 		
-		// HTTP 429 response backoff: 
-		if (status == AppointmentStatus.RATE_LIMITED) {
-			
-			consecutiveTechnicalFailureCount = 0;
+		AppointmentStatus status = result.getStatus();
+		
+		 consecutiveTechnicalFailureCount++;
+
+		    LOGGER.warning(
+		            "TECHNICAL_FAILURE | status="
+		            + status
+		            + " | consecutive="
+		            + consecutiveTechnicalFailureCount
+		    );
+		    
+		    if (consecutiveTechnicalFailureCount
+		            >= TECHNICAL_FAILURE_ALERT_THRESHOLD
+		            && !technicalFailureAlertSent) {
+
+		        notifyStatusChange(result);
+
+		        technicalFailureAlertSent = true;
+		    }
+		
+	}
+	
+	private static void handleRateLimited(AvailabilityResult result) {
+		
+		consecutiveTechnicalFailureCount = 0;
 			technicalFailureAlertSent = false;
 
 		    rateLimitBackoffUntil =
@@ -293,79 +389,7 @@ public class Main {
 
 		        rateLimitAlertSent = true;
 		    }
-
-		    return;
-		}
 		
-		if (isGeneralTechnicalFailure(status)) {
-
-		    consecutiveTechnicalFailureCount++;
-
-		    LOGGER.warning(
-		            "TECHNICAL_FAILURE | status="
-		            + status
-		            + " | consecutive="
-		            + consecutiveTechnicalFailureCount
-		    );
-		    
-		    if (consecutiveTechnicalFailureCount
-		            >= TECHNICAL_FAILURE_ALERT_THRESHOLD
-		            && !technicalFailureAlertSent) {
-
-		        notifyStatusChange(result);
-
-		        technicalFailureAlertSent = true;
-		    }
-
-		    return;
-		}
-		
-		if (isTechnicalFailure(status)) {
-		    return;
-		}
-		
-		List<String> currentDates = result.getAvailableDates();		
-		
-		boolean statusChanged =
-		        status != previousStatus;
-		
-		boolean datesChanged =
-		        status == AppointmentStatus.AVAILABLE
-		        && !currentDates.equals(previousAvailableDates);
-		
-		if (statusChanged || datesChanged) {
-
-		    if (statusChanged) {
-
-		        LOGGER.info(
-		                "STATUS_CHANGE | "
-		                + previousStatus
-		                + " -> "
-		                + status
-		        );
-		    }
-		    
-		    if (datesChanged) {
-
-		        LOGGER.info(
-		                "AVAILABLE_DATES_CHANGE | "
-		                + previousAvailableDates
-		                + " -> "
-		                + currentDates
-		        );
-		    }
-		    
-		    if (status == AppointmentStatus.PAGE_CHANGED) {
-		        saveSnapshot(html);
-		    }
-		   
-			
-			notifyStatusChange(result);
-			
-			previousStatus = status;
-			previousAvailableDates = List.copyOf(currentDates);
-		}
-
 	}
 	
 	private static void handleAccessForbidden(AvailabilityResult result) {
@@ -401,7 +425,59 @@ public class Main {
 	    }
 		
 	}
+	
+	private static void handleStateChange(
+	        AvailabilityResult result,
+	        String html) {
 
+	    AppointmentStatus status =
+	            result.getStatus();
+
+	    List<String> currentDates =
+	            result.getAvailableDates();
+
+	    boolean statusChanged =
+	            status != previousStatus;
+
+	    boolean datesChanged =
+	            status == AppointmentStatus.AVAILABLE
+	            && !currentDates.equals(previousAvailableDates);
+
+	    if (statusChanged || datesChanged) {
+
+	        if (statusChanged) {
+
+	            LOGGER.info(
+	                    "STATUS_CHANGE | "
+	                    + previousStatus
+	                    + " -> "
+	                    + status
+	            );
+	        }
+
+	        if (datesChanged) {
+
+	            LOGGER.info(
+	                    "AVAILABLE_DATES_CHANGE | "
+	                    + previousAvailableDates
+	                    + " -> "
+	                    + currentDates
+	            );
+	        }
+
+	        if (status == AppointmentStatus.PAGE_CHANGED) {
+	            saveSnapshot(html);
+	        }
+
+	        notifyStatusChange(result);
+
+	        previousStatus = status;
+
+	        previousAvailableDates =
+	                List.copyOf(currentDates);
+	    }
+	}
+	
 	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
 
 		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).timeout(REQUEST_TIMEOUT).GET()
@@ -877,6 +953,28 @@ public class Main {
 	    }
 
 	    return dates;
+	}
+	
+	private static class CheckExecutionResult {
+
+	    private final AvailabilityResult result;
+	    private final String html;
+
+	    public CheckExecutionResult(
+	            AvailabilityResult result,
+	            String html) {
+
+	        this.result = result;
+	        this.html = html;
+	    }
+
+	    public AvailabilityResult getResult() {
+	        return result;
+	    }
+
+	    public String getHtml() {
+	        return html;
+	    }
 	}
 	
 	
