@@ -89,63 +89,15 @@ public class Main {
 	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
+		
+		testForbiddenSequenceReset();
 
-		testForbiddenRecoveryAfterRefactor();
 		//scheduler = Executors.newSingleThreadScheduledExecutor();
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
-	}
-	
-	private static void testForbiddenRecoveryAfterRefactor() {
-
-	    // Начальное состояние
-	    consecutiveForbiddenCount = 0;
-	    forbiddenBackoffUntil = Instant.EPOCH;
-	    forbiddenAlertSent = false;
-
-	    AvailabilityResult forbiddenResult =
-	            new AvailabilityResult(
-	                    AppointmentStatus.ACCESS_FORBIDDEN,
-	                    List.of()
-	            );
-
-	    System.out.println("=== FIRST 403 ===");
-	    handleAccessForbidden(forbiddenResult);
-
-	    System.out.println(
-	            "count=" + consecutiveForbiddenCount
-	    );
-
-	    System.out.println("=== SECOND 403 ===");
-	    handleAccessForbidden(forbiddenResult);
-
-	    System.out.println(
-	            "count=" + consecutiveForbiddenCount
-	    );
-
-	    System.out.println("=== SUCCESSFUL CHECK ===");
-
-	    handleSuccessfulCheck(
-	            AppointmentStatus.FULLY_BOOKED
-	    );
-
-	    System.out.println(
-	            "count after recovery="
-	            + consecutiveForbiddenCount
-	    );
-
-	    System.out.println(
-	            "backoff after recovery="
-	            + forbiddenBackoffUntil
-	    );
-
-	    System.out.println(
-	            "alertSent after recovery="
-	            + forbiddenAlertSent
-	    );
 	}
 	
 	private static void safeCheckOnce() {
@@ -155,9 +107,11 @@ public class Main {
 
 		} catch (Exception e) {
 
-			e.printStackTrace();
-
-			LOGGER.log(Level.SEVERE, "Unexpected error in scheduled check", e);
+			LOGGER.log(
+					Level.SEVERE, 
+					"Unexpected error in scheduled check", 
+					e
+					);
 		}
 	}
 	
@@ -182,29 +136,32 @@ public class Main {
 			handleAccessForbidden(result);			
 		    return;
 		}
-		
-		//consecutiveForbiddenCount = 0;
-		//forbiddenBackoffUntil = Instant.EPOCH;	
-
+			
 		if (status == AppointmentStatus.RATE_LIMITED) {
 			
+			resetForbiddenSequence();
 			handleRateLimited(result);
 
 		    return;
 		}
 		
 		if (isGeneralTechnicalFailure(status)) {
-
+			
+			resetForbiddenSequence();
 			handleGeneralTechnicalFailure(result);
 
 		    return;
 		}
 		
 		if (isTechnicalFailure(status)) {
+			
+			resetForbiddenSequence();
 		    return;
 		}
 		
 		handleSuccessfulCheck(status);
+		
+		resetForbiddenSequence();
 		
 		handleStateChange(
 				result,
@@ -389,8 +346,6 @@ public class Main {
 		    consecutiveTechnicalFailureCount = 0;
 		    technicalFailureAlertSent = false;
 		    
-		    consecutiveForbiddenCount = 0;
-			forbiddenBackoffUntil = Instant.EPOCH;
 		}
 		
 	}
@@ -475,6 +430,12 @@ public class Main {
 	        }
 	    }
 		
+	}
+	
+	private static void resetForbiddenSequence() {
+
+	    consecutiveForbiddenCount = 0;
+	    forbiddenBackoffUntil = Instant.EPOCH;
 	}
 	
 	private static void handleStateChange(
@@ -618,7 +579,7 @@ public class Main {
 	
 	private static boolean isGeneralTechnicalFailure(
 	        AppointmentStatus status) {
-
+			
 	    return status == AppointmentStatus.NETWORK_ERROR
 	            || status == AppointmentStatus.SERVER_ERROR
 	            || status == AppointmentStatus.ERROR;
