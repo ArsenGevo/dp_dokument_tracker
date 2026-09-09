@@ -54,12 +54,6 @@ public class Main {
 	private static final Logger LOGGER = TrackerLogger.getLogger();
 
 
-	enum PageMode {
-	    BUSY_MESSAGE,
-	    BOOKING_FORM,
-	    UNKNOWN
-	}
-
 	private static AppointmentStatus previousStatus = null;
 	
 	private static List<String> previousAvailableDates = List.of();
@@ -90,11 +84,10 @@ public class Main {
 
 	public static void main(String[] args) {
 		
-		testForbiddenSequenceReset();
 
-		//scheduler = Executors.newSingleThreadScheduledExecutor();
+		scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
@@ -791,17 +784,13 @@ public class Main {
 	            );
 	    
 	    String responseBody = response.body().trim();
-	    
-	    
-	    System.out.println(
-	            "DAYS API HTTP: " + response.statusCode()
-	    );
-
-	    System.out.println(
-	            "DAYS API RESPONSE: " + response.body()
-	    );
-	    
+	    	    
 	    int apiStatusCode = response.statusCode();
+	    
+	    LOGGER.info(
+	            "DAYS_API | HTTP "
+	            + apiStatusCode
+	    );
 	    
 	    if (apiStatusCode == 429) {
 	        return new AvailabilityResult(
@@ -824,17 +813,8 @@ public class Main {
 	        );
 	    }
 	    
-	    if (response.statusCode() == 200) {
+	    if (apiStatusCode == 200) {
 
-	        if (responseBody.equals("{\"days\":[]}")) {
-	        	
-	        	LOGGER.info("DAYS_API | days=0");
-	            return new AvailabilityResult(
-	                    AppointmentStatus.FULLY_BOOKED,
-	                    List.of()
-                );
-	        }
-	        
 	        if (!responseBody.contains("\"days\"")) {
 
 	            LOGGER.warning(
@@ -846,29 +826,35 @@ public class Main {
 	                    List.of()
 	            );
 	        }
-	        
+
 	        List<String> availableDates =
 	                extractAvailableDates(responseBody);
-	        
-	        if (!availableDates.isEmpty()) {
+
+	        if (availableDates.isEmpty()) {
 
 	            LOGGER.info(
-	                    "DAYS_API | days="
-	                    + availableDates.size()
-	                    + " | "
-	                    + String.join(", ", availableDates)
+	                    "DAYS_API | days=0"
 	            );
 
 	            return new AvailabilityResult(
-	                    AppointmentStatus.AVAILABLE,
-	                    availableDates
+	                    AppointmentStatus.FULLY_BOOKED,
+	                    List.of()
 	            );
 	        }
 
-	        LOGGER.warning(
-	                "DAYS_API | UNKNOWN_RESPONSE"
-	        );        
+	        LOGGER.info(
+	                "DAYS_API | days="
+	                + availableDates.size()
+	                + " | "
+	                + String.join(", ", availableDates)
+	        );
+
+	        return new AvailabilityResult(
+	                AppointmentStatus.AVAILABLE,
+	                availableDates
+	        );
 	    }
+	    
 	    return new AvailabilityResult(
                 AppointmentStatus.ERROR,
                 List.of()
