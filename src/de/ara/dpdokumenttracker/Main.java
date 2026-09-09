@@ -24,7 +24,6 @@ import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.util.ArrayList;
 import java.util.List;
-import java.time.Duration;
 import java.time.Instant;
 
 public class Main {
@@ -91,13 +90,62 @@ public class Main {
 
 	public static void main(String[] args) {
 
-		
-		scheduler = Executors.newSingleThreadScheduledExecutor();
+		testForbiddenRecoveryAfterRefactor();
+		//scheduler = Executors.newSingleThreadScheduledExecutor();
 
-		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
 
 		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
 
+	}
+	
+	private static void testForbiddenRecoveryAfterRefactor() {
+
+	    // Начальное состояние
+	    consecutiveForbiddenCount = 0;
+	    forbiddenBackoffUntil = Instant.EPOCH;
+	    forbiddenAlertSent = false;
+
+	    AvailabilityResult forbiddenResult =
+	            new AvailabilityResult(
+	                    AppointmentStatus.ACCESS_FORBIDDEN,
+	                    List.of()
+	            );
+
+	    System.out.println("=== FIRST 403 ===");
+	    handleAccessForbidden(forbiddenResult);
+
+	    System.out.println(
+	            "count=" + consecutiveForbiddenCount
+	    );
+
+	    System.out.println("=== SECOND 403 ===");
+	    handleAccessForbidden(forbiddenResult);
+
+	    System.out.println(
+	            "count=" + consecutiveForbiddenCount
+	    );
+
+	    System.out.println("=== SUCCESSFUL CHECK ===");
+
+	    handleSuccessfulCheck(
+	            AppointmentStatus.FULLY_BOOKED
+	    );
+
+	    System.out.println(
+	            "count after recovery="
+	            + consecutiveForbiddenCount
+	    );
+
+	    System.out.println(
+	            "backoff after recovery="
+	            + forbiddenBackoffUntil
+	    );
+
+	    System.out.println(
+	            "alertSent after recovery="
+	            + forbiddenAlertSent
+	    );
 	}
 	
 	private static void safeCheckOnce() {
@@ -135,8 +183,8 @@ public class Main {
 		    return;
 		}
 		
-		consecutiveForbiddenCount = 0;
-		forbiddenBackoffUntil = Instant.EPOCH;	
+		//consecutiveForbiddenCount = 0;
+		//forbiddenBackoffUntil = Instant.EPOCH;	
 
 		if (status == AppointmentStatus.RATE_LIMITED) {
 			
@@ -340,6 +388,9 @@ public class Main {
 		    
 		    consecutiveTechnicalFailureCount = 0;
 		    technicalFailureAlertSent = false;
+		    
+		    consecutiveForbiddenCount = 0;
+			forbiddenBackoffUntil = Instant.EPOCH;
 		}
 		
 	}
