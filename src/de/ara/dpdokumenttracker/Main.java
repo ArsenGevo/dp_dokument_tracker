@@ -25,6 +25,8 @@ import java.net.CookiePolicy;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 public class Main {
 
@@ -83,6 +85,47 @@ public class Main {
 	private static ScheduledExecutorService scheduler;
 
 	public static void main(String[] args) {
+		
+		System.out.println("=== ENVIRONMENT DIAGNOSTICS ===");
+
+		System.out.println("OS: "
+		        + System.getProperty("os.name")
+		        + " "
+		        + System.getProperty("os.version"));
+
+		System.out.println("Java version: "
+		        + System.getProperty("java.version"));
+
+		System.out.println("Java vendor: "
+		        + System.getProperty("java.vendor"));
+
+		System.out.println("Java home: "
+		        + System.getProperty("java.home"));
+
+		System.out.println("preferIPv4Stack: "
+		        + System.getProperty("java.net.preferIPv4Stack"));
+
+		System.out.println("preferIPv6Addresses: "
+		        + System.getProperty("java.net.preferIPv6Addresses"));
+		
+		try {
+		    InetAddress[] addresses =
+		            InetAddress.getAllByName("munich.pasport.org.ua");
+
+		    for (InetAddress address : addresses) {
+		        System.out.println(
+		                "Resolved: "
+		                + address.getHostAddress()
+		                + " | "
+		                + address.getClass().getSimpleName()
+		        );
+		    }
+
+		} catch (UnknownHostException e) {
+		    System.out.println(
+		            "DNS ERROR: " + e.getMessage()
+		    );
+		}
 		
 
 		scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -489,6 +532,10 @@ public class Main {
 				.build();
 
 		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+		
+		System.out.println(
+		        "HTTP version: " + response.version()
+		);
 
 		return response;
 	}
