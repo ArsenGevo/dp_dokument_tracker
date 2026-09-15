@@ -136,6 +136,58 @@ public class Main {
 
 	}
 	
+	private static void logHttpDiagnostics(HttpResponse<String> response) {
+
+	    int status = response.statusCode();
+
+	    String server = response.headers()
+	            .firstValue("server")
+	            .orElse("-");
+
+	    String cfRay = response.headers()
+	            .firstValue("cf-ray")
+	            .orElse("-");
+
+	    String cfMitigated = response.headers()
+	            .firstValue("cf-mitigated")
+	            .orElse("-");
+
+	    String contentType = response.headers()
+	            .firstValue("content-type")
+	            .orElse("-");
+
+	    String body = response.body();
+
+	    int bodyLength = body == null ? 0 : body.length();
+
+	    LOGGER.info(
+	            "HTTP_DIAGNOSTICS"
+	            + " | status=" + status
+	            + " | version=" + response.version()
+	            + " | server=" + server
+	            + " | cf-ray=" + cfRay
+	            + " | cf-mitigated=" + cfMitigated
+	            + " | content-type=" + contentType
+	            + " | body-length=" + bodyLength
+	    );
+
+	    if (status == 403 && body != null && !body.isBlank()) {
+
+	        String preview = body
+	                .replace("\r", " ")
+	                .replace("\n", " ")
+	                .replaceAll("\\s+", " ")
+	                .trim();
+
+	        int maxLength = Math.min(preview.length(), 500);
+
+	        LOGGER.warning(
+	                "HTTP_403_BODY | "
+	                + preview.substring(0, maxLength)
+	        );
+	    }
+	}
+	
 	private static void safeCheckOnce() {
 
 		try {
@@ -533,9 +585,8 @@ public class Main {
 
 		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
 		
-		System.out.println(
-		        "HTTP version: " + response.version()
-		);
+
+		logHttpDiagnostics(response);
 
 		return response;
 	}
