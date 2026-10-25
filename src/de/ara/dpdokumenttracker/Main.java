@@ -62,9 +62,9 @@ public class Main {
 	
 	private static int consecutiveForbiddenCount = 0;
 	
-	private static final int FORBIDDEN_BACKOFF_THRESHOLD = 2;
+	private static final int FORBIDDEN_BACKOFF_THRESHOLD = 10;
 	private static final Duration FORBIDDEN_BACKOFF_DURATION =
-	        Duration.ofMinutes(30);
+	        Duration.ofMinutes(4);
 	private static Instant forbiddenBackoffUntil =
 	        Instant.EPOCH;
 	private static boolean forbiddenAlertSent = false;
@@ -587,6 +587,7 @@ public class Main {
 		
 
 		logHttpDiagnostics(response);
+		logCookieDiagnostics("AFTER_LOAD_PAGE");
 
 		return response;
 	}
@@ -881,6 +882,8 @@ public class Main {
 	                    HttpResponse.BodyHandlers.ofString()
 	            );
 	    
+	    logCookieDiagnostics("AFTER_DAYS_API");
+	    
 	    String responseBody = response.body().trim();
 	    	    
 	    int apiStatusCode = response.statusCode();
@@ -1073,5 +1076,29 @@ public class Main {
 	    }
 	}
 	
+	private static void logCookieDiagnostics(String stage) {
+
+	    var cookies = COOKIE_MANAGER
+	            .getCookieStore()
+	            .getCookies();
+
+	    if (cookies.isEmpty()) {
+	        LOGGER.info("COOKIE_DIAGNOSTICS | stage=" + stage + " | cookies=[]");
+	        return;
+	    }
+
+	    String cookieNames = cookies.stream()
+	            .map(cookie -> cookie.getName())
+	            .distinct()
+	            .sorted()
+	            .toList()
+	            .toString();
+
+	    LOGGER.info(
+	            "COOKIE_DIAGNOSTICS"
+	            + " | stage=" + stage
+	            + " | cookies=" + cookieNames
+	    );
+	}
 	
 }
