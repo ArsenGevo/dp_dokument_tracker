@@ -18,288 +18,1009 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.logging.Logger;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
+import java.util.ArrayList;
+import java.util.List;
+import java.time.Instant;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 public class Main {
 
-	//private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";	
-	private static final String URL = "http://127.0.0.1:5500/index.html";
-	
-	
-	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
-	
-	private static final HttpClient HTTP_CLIENT =
-	        HttpClient.newBuilder()
-	                
-	        		//
-	        .version(HttpClient.Version.HTTP_1_1)
-	                .connectTimeout(Duration.ofSeconds(5))
-	                .build();
-	
-	private static final Logger LOGGER =
-	        TrackerLogger.getLogger();
+	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";
+	 
+	//private static final String URL = "http://127.0.0.1:5500/index.html";
 
-	private enum AppointmentStatus {
-		FULLY_BOOKED, 
-		PAGE_CHANGED, 
-		RATE_LIMITED, 
-		ACCESS_FORBIDDEN,
-		SERVER_ERROR,
-		NETWORK_ERROR,
-		ERROR
-	}
+	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
+
+	private static final String SERVICES_FORM = "id=\"services\"";
+		
+	private static final CookieManager COOKIE_MANAGER =
+	        new CookieManager(null, CookiePolicy.ACCEPT_ALL);
 	
+	private static final Duration REQUEST_TIMEOUT =
+	        Duration.ofSeconds(60);
+	private static final Duration CONNECT_TIMEOUT =
+	        Duration.ofSeconds(5);
+
+	private static final HttpClient HTTP_CLIENT = 
+			HttpClient.newBuilder()
+			//.version(HttpClient.Version.HTTP_1_1)
+			.cookieHandler(COOKIE_MANAGER)
+			.connectTimeout(CONNECT_TIMEOUT)
+			.build();
+
+	private static final Logger LOGGER = TrackerLogger.getLogger();
+
+
 	private static AppointmentStatus previousStatus = null;
 	
-		
+	private static List<String> previousAvailableDates = List.of();
+	
+	private static int consecutiveForbiddenCount = 0;
+	
+	private static final int FORBIDDEN_BACKOFF_THRESHOLD = 2;
+	private static final Duration FORBIDDEN_BACKOFF_DURATION =
+	        Duration.ofMinutes(30);
+	private static Instant forbiddenBackoffUntil =
+	        Instant.EPOCH;
+	private static boolean forbiddenAlertSent = false;
+	
+	private static final Duration RATE_LIMIT_BACKOFF_DURATION =
+	        Duration.ofMinutes(30);
+	private static Instant rateLimitBackoffUntil =
+	        Instant.EPOCH;
+	private static boolean rateLimitAlertSent = false;
+	
+	private static final int TECHNICAL_FAILURE_ALERT_THRESHOLD = 3;
+	private static int consecutiveTechnicalFailureCount = 0;
+	private static boolean technicalFailureAlertSent = false;
+	
+	
+
+	
+	private static ScheduledExecutorService scheduler;
+
 	public static void main(String[] args) {
 		
+		System.out.println("=== ENVIRONMENT DIAGNOSTICS ===");
+
+		System.out.println("OS: "
+		        + System.getProperty("os.name")
+		        + " "
+		        + System.getProperty("os.version"));
+
+		System.out.println("Java version: "
+		        + System.getProperty("java.version"));
+
+		System.out.println("Java vendor: "
+		        + System.getProperty("java.vendor"));
+
+		System.out.println("Java home: "
+		        + System.getProperty("java.home"));
+
+		System.out.println("preferIPv4Stack: "
+		        + System.getProperty("java.net.preferIPv4Stack"));
+
+		System.out.println("preferIPv6Addresses: "
+		        + System.getProperty("java.net.preferIPv6Addresses"));
 		
-	    ScheduledExecutorService scheduler =
-	            Executors.newSingleThreadScheduledExecutor();
-	    
-	    //scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 5, TimeUnit.MINUTES);
-	    scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
-	    
+		try {
+		    InetAddress[] addresses =
+		            InetAddress.getAllByName("munich.pasport.org.ua");
+
+		    for (InetAddress address : addresses) {
+		        System.out.println(
+		                "Resolved: "
+		                + address.getHostAddress()
+		                + " | "
+		                + address.getClass().getSimpleName()
+		        );
+		    }
+
+		} catch (UnknownHostException e) {
+		    System.out.println(
+		            "DNS ERROR: " + e.getMessage()
+		    );
+		}
 		
+
+		scheduler = Executors.newSingleThreadScheduledExecutor();
+
+		scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 2, TimeUnit.MINUTES);
+
+		//scheduler.scheduleWithFixedDelay(Main::safeCheckOnce, 0, 30, TimeUnit.SECONDS);
+
 	}
 	
 	private static void safeCheckOnce() {
 
-	    try {
-	        checkOnce();
+		try {
+			checkOnce();
 
-	    } catch (Exception e) {
+		} catch (Exception e) {
 
-	        e.printStackTrace();
-	        
-	        LOGGER.log(
-	                Level.SEVERE,
-	                "Unexpected error in scheduled check",
-	                e
-	        );
-	    }
+			LOGGER.log(
+					Level.SEVERE, 
+					"Unexpected error in scheduled check", 
+					e
+					);
+		}
 	}
 	
 	public static void checkOnce() {
 
-		AppointmentStatus status;
-		String html = null;
-
-		try {
-
-			HttpResponse<String> response = loadPage();
-
-			int httpStatusCode = response.statusCode();
-
-			if (httpStatusCode >= 200 && httpStatusCode < 300) {
-				
-				status = checkStatus(response.body());
-				html = response.body();
-
-			} else if (httpStatusCode == 429) {
-				
-				status = AppointmentStatus.RATE_LIMITED;
-				
-			} else if (httpStatusCode == 403) {
-
-			    status = AppointmentStatus.ACCESS_FORBIDDEN;
-
-			} else if (httpStatusCode >= 500 && httpStatusCode < 600) {
-				
-			status = AppointmentStatus.SERVER_ERROR;
-			
-			} else {
-				
-				status = AppointmentStatus.ERROR;
-			}
-			
-			logHttpResult(httpStatusCode, status);
-
-		} catch (IOException e) {
-
-			status = AppointmentStatus.NETWORK_ERROR;
-		   
-		    LOGGER.log(
-		            Level.WARNING,
-		            "NETWORK_ERROR | "
-		                    + e.getClass().getSimpleName()
-		    );
-		} 
-		catch (InterruptedException e) {
-
-			Thread.currentThread().interrupt();
-			status = AppointmentStatus.ERROR;
-			
-			LOGGER.log(
-		            Level.WARNING,
-		            "Check thread was interrupted",
-		            e
-		    );
-			
+		if (isBackoffActive()) {
+		    return;
 		}
 		
-		catch (Exception e) {
-			//temporally for fix
-		    e.printStackTrace();
-		    status = AppointmentStatus.ERROR;
-		}
+		CheckExecutionResult executionResult =
+		        performCheck();
+
+		AvailabilityResult result =
+		        executionResult.getResult();
+
+		String html =
+		        executionResult.getHtml();
 		
-		if (status != previousStatus) {
+		AppointmentStatus status = result.getStatus();
+		
+		if (status == AppointmentStatus.ACCESS_FORBIDDEN) {			
+			handleAccessForbidden(result);			
+		    return;
+		}
 			
-			LOGGER.info(
-			        "STATUS_CHANGE | "
-			        + previousStatus
-			        + " -> "
-			        + status
-			);
+		if (status == AppointmentStatus.RATE_LIMITED) {
 			
-			if (status == AppointmentStatus.PAGE_CHANGED) {
-		        saveSnapshot(html);
-		    }
-			notifyStatusChange(status);
-			previousStatus = status;
+			resetForbiddenSequence();
+			handleRateLimited(result);
+
+		    return;
 		}
 		
-	}
+		if (isGeneralTechnicalFailure(status)) {
+			
+			resetForbiddenSequence();
+			handleGeneralTechnicalFailure(result);
 
-	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
-
-		HttpRequest request = HttpRequest.newBuilder()
-				.uri(URI.create(URL))
-				.timeout(Duration.ofSeconds(10))
-				.GET()
-				.build();
-		
-
-		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-		
-
-
-		return response;
-	}
-
-	private static AppointmentStatus checkStatus(String html) {
-
-		if (html.contains(BUSY_MESSAGE)) {
-			return AppointmentStatus.FULLY_BOOKED;
+		    return;
 		}
+		
+		if (isTechnicalFailure(status)) {
+			
+			resetForbiddenSequence();
+		    return;
+		}
+		
+		handleSuccessfulCheck(status);
+		
+		resetForbiddenSequence();
+		
+		handleStateChange(
+				result,
+				html
+		);
 
-		return AppointmentStatus.PAGE_CHANGED;
 	}
 	
-	
-	private static String getStatusMessage(AppointmentStatus status) {
+	private static boolean isBackoffActive() {
 
-	    switch (status) {
+	    if (Instant.now().isBefore(forbiddenBackoffUntil)) {
 
-	    case FULLY_BOOKED:
-	        return "DP Dokument: Наразі всі місця зайняті.";
+	        LOGGER.info(
+	                "BACKOFF_ACTIVE | until="
+	                + forbiddenBackoffUntil
+	        );
 
-	    case PAGE_CHANGED:
-	        return "DP Dokument: состояние страницы изменилось!";
-
-	    case RATE_LIMITED:
-	        return "DP Dokument: превышение лимита запросов! (HTTP 429)";
-	        
-	    case ACCESS_FORBIDDEN:
-	        return "DP Dokument: доступ запрещён сервером (HTTP 403).";
-	        
-	    case SERVER_ERROR: 
-	    	return "DP Dokument: ошибка сервера (HTTP 500).";
-	    	
-	    case NETWORK_ERROR: 
-	    	return "Oшибка сети или соединения.";
-
-	    case ERROR:
-	        return "Непредвиденная ошибка программы.";
-
-	    default:
-	        return "Неизвестное состояние.";
+	        return true;
 	    }
+
+	    if (Instant.now().isBefore(rateLimitBackoffUntil)) {
+
+	        LOGGER.info(
+	                "RATE_LIMIT_BACKOFF_ACTIVE | until="
+	                + rateLimitBackoffUntil
+	        );
+
+	        return true;
+	    }
+
+	    return false;
 	}
 	
-	
-	private static void notifyStatusChange(AppointmentStatus status) {
+	private static CheckExecutionResult performCheck() {
 
-	    String message = time() + " " + getStatusMessage(status);
-
-	    //Message for telegram in console: System.out.println(message);
+	    String html = null;
 
 	    try {
 
-	        TelegramNotifier.sendMessage(message);
+	        HttpResponse<String> response = loadPage();
+
+	        int httpStatusCode = response.statusCode();
+	        html = response.body();
+
+	        AvailabilityResult result;
+
+	        if (httpStatusCode >= 200 && httpStatusCode < 300) {
+
+	            result = checkStatus(html);
+
+	        } else if (httpStatusCode == 429) {
+
+	            result = new AvailabilityResult(
+	                    AppointmentStatus.RATE_LIMITED,
+	                    List.of()
+	            );
+
+	        } else if (httpStatusCode == 403) {
+
+	            result = new AvailabilityResult(
+	                    AppointmentStatus.ACCESS_FORBIDDEN,
+	                    List.of()
+	            );
+
+	        } else if (httpStatusCode >= 500
+	                && httpStatusCode < 600) {
+
+	            result = new AvailabilityResult(
+	                    AppointmentStatus.SERVER_ERROR,
+	                    List.of()
+	            );
+
+	        } else {
+
+	            result = new AvailabilityResult(
+	                    AppointmentStatus.ERROR,
+	                    List.of()
+	            );
+	        }
+
+	        logHttpResult(
+	                httpStatusCode,
+	                result.getStatus()
+	        );
+
+	        return new CheckExecutionResult(
+	                result,
+	                html
+	        );
 
 	    } catch (IOException e) {
 
-	        LOGGER.warning(
-	                "TELEGRAM_SEND_ERROR | "
+	        LOGGER.log(
+	                Level.WARNING,
+	                "NETWORK_ERROR | "
 	                + e.getClass().getSimpleName()
+	        );
+
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.NETWORK_ERROR,
+	                        List.of()
+	                ),
+	                html
 	        );
 
 	    } catch (InterruptedException e) {
 
 	        Thread.currentThread().interrupt();
 
-	        LOGGER.warning(
-	                "TELEGRAM_SEND_INTERRUPTED"
+	        LOGGER.log(
+	                Level.WARNING,
+	                "Check thread was interrupted",
+	                e
+	        );
+
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.ERROR,
+	                        List.of()
+	                ),
+	                html
+	        );
+
+	    } catch (Exception e) {
+
+	        LOGGER.log(
+	                Level.WARNING,
+	                "UNEXPECTED_ERROR | "
+	                + e.getClass().getSimpleName(),
+	                e
+	        );
+
+	        return new CheckExecutionResult(
+	                new AvailabilityResult(
+	                        AppointmentStatus.ERROR,
+	                        List.of()
+	                ),
+	                html
 	        );
 	    }
 	}
 	
-	private static void saveSnapshot(String html) {
+	private static void handleSuccessfulCheck(
+	        AppointmentStatus status) {
+		
+				boolean successfulCheck =
+		        status == AppointmentStatus.FULLY_BOOKED
+		        || status == AppointmentStatus.AVAILABLE
+		        || status == AppointmentStatus.PAGE_CHANGED;
 
-	    try {
+		if (successfulCheck) {
 
-	        Path directory = Path.of("snapshots");
+		    if (consecutiveForbiddenCount > 0) {
 
-	        Files.createDirectories(directory);
+		        LOGGER.info(
+		                "ACCESS_RESTORED | after="
+		                + consecutiveForbiddenCount
+		                + " forbidden responses"
+		        );
+		    }
+		    
+		    if (!rateLimitBackoffUntil.equals(Instant.EPOCH)) {
 
-	        String timestamp = LocalDateTime.now()
-	                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+		        LOGGER.info("RATE_LIMIT_RESTORED");
 
-	        String fileName =
-	                timestamp + "_PAGE_CHANGED.html";
+		        rateLimitBackoffUntil = Instant.EPOCH;
+		    }
+		    
+		    if (consecutiveTechnicalFailureCount > 0) {
 
-	        Path file = directory.resolve(fileName);
+		        LOGGER.info(
+		                "TECHNICAL_FAILURE_RESTORED | after="
+		                + consecutiveTechnicalFailureCount
+		                + " failed checks"
+		        );
+		    }
+		    
+		    rateLimitAlertSent = false;
+		    forbiddenAlertSent = false;
+		    
+		    consecutiveTechnicalFailureCount = 0;
+		    technicalFailureAlertSent = false;
+		    
+		}
+		
+	}
+	
+	private static void handleGeneralTechnicalFailure(
+	        AvailabilityResult result) {
+		
+		AppointmentStatus status = result.getStatus();
+		
+		 consecutiveTechnicalFailureCount++;
 
-	        Files.writeString(
-	                file,
-	                html,
-	                StandardCharsets.UTF_8
-	        );
+		    LOGGER.warning(
+		            "TECHNICAL_FAILURE | status="
+		            + status
+		            + " | consecutive="
+		            + consecutiveTechnicalFailureCount
+		    );
+		    
+		    if (consecutiveTechnicalFailureCount
+		            >= TECHNICAL_FAILURE_ALERT_THRESHOLD
+		            && !technicalFailureAlertSent) {
 
-	        LOGGER.info(
-	                "SNAPSHOT_SAVED | " + file.toAbsolutePath()
-	        );
+		        notifyStatusChange(result);
 
-	    } catch (IOException e) {
+		        technicalFailureAlertSent = true;
+		    }
+		
+	}
+	
+	private static void handleRateLimited(AvailabilityResult result) {
+		
+		consecutiveTechnicalFailureCount = 0;
+			technicalFailureAlertSent = false;
+
+		    rateLimitBackoffUntil =
+		            Instant.now()
+		            .plus(RATE_LIMIT_BACKOFF_DURATION);
+
+		    LOGGER.warning(
+		            "RATE_LIMITED | BACKOFF_STARTED | until="
+		            + rateLimitBackoffUntil
+		    );
+		    
+		    if (!rateLimitAlertSent) {
+
+		        notifyStatusChange(result);
+
+		        rateLimitAlertSent = true;
+		    }
+		
+	}
+	
+	private static void handleAccessForbidden(AvailabilityResult result) {
+		
+		consecutiveTechnicalFailureCount = 0;
+		technicalFailureAlertSent = false;
+		
+		consecutiveForbiddenCount++;
+
+	    LOGGER.warning(
+	            "ACCESS_FORBIDDEN | consecutive="
+	            + consecutiveForbiddenCount
+	    );
+	    
+	    if (consecutiveForbiddenCount
+	            >= FORBIDDEN_BACKOFF_THRESHOLD) {
+	    	
+	    	forbiddenBackoffUntil =
+	                Instant.now()
+	                .plus(FORBIDDEN_BACKOFF_DURATION);
 
 	        LOGGER.warning(
-	                "SNAPSHOT_SAVE_ERROR | "
-	                + e.getClass().getSimpleName()
+	                "ACCESS_FORBIDDEN | BACKOFF_STARTED | until="
+	                + forbiddenBackoffUntil
 	        );
+	        
+	        if (!forbiddenAlertSent) {
+
+	            notifyStatusChange(result);
+
+	            forbiddenAlertSent = true;
+	        }
+	    }
+		
+	}
+	
+	private static void resetForbiddenSequence() {
+
+	    consecutiveForbiddenCount = 0;
+	    forbiddenBackoffUntil = Instant.EPOCH;
+	}
+	
+	private static void handleStateChange(
+	        AvailabilityResult result,
+	        String html) {
+
+	    AppointmentStatus status =
+	            result.getStatus();
+
+	    List<String> currentDates =
+	            result.getAvailableDates();
+
+	    boolean statusChanged =
+	            status != previousStatus;
+
+	    boolean datesChanged =
+	            status == AppointmentStatus.AVAILABLE
+	            && !currentDates.equals(previousAvailableDates);
+
+	    if (statusChanged || datesChanged) {
+
+	        if (statusChanged) {
+
+	            LOGGER.info(
+	                    "STATUS_CHANGE | "
+	                    + previousStatus
+	                    + " -> "
+	                    + status
+	            );
+	        }
+
+	        if (datesChanged) {
+
+	            LOGGER.info(
+	                    "AVAILABLE_DATES_CHANGE | "
+	                    + previousAvailableDates
+	                    + " -> "
+	                    + currentDates
+	            );
+	        }
+
+	        if (status == AppointmentStatus.PAGE_CHANGED) {
+	            saveSnapshot(html);
+	        }
+
+	        notifyStatusChange(result);
+
+	        previousStatus = status;
+
+	        previousAvailableDates =
+	                List.copyOf(currentDates);
 	    }
 	}
 	
-	private static void logHttpResult(
-	        int httpStatusCode,
+	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
+
+		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).timeout(REQUEST_TIMEOUT).GET()
+				.build();
+
+		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+		
+		System.out.println(
+		        "HTTP version: " + response.version()
+		);
+
+		return response;
+	}
+
+	private static AvailabilityResult checkStatus(String html) {
+		
+		//MODE A: BUSY_MESSAGE
+		if (html.contains(BUSY_MESSAGE)) {
+			
+			return new AvailabilityResult(
+		            AppointmentStatus.FULLY_BOOKED,
+		            List.of()
+		    ); 
+			
+			} 
+		
+		//MODE B: BOOKING_FORM
+		if (isFormMode(html)) {
+				
+				LOGGER.info("PAGE_MODE | BOOKING_FORM");
+				
+				String csrf = extractCsrf(html);
+			    String centerId = extractCenterId(html);
+			    
+			    if (csrf == null || centerId == null) {
+		            return new AvailabilityResult(
+		                    AppointmentStatus.PAGE_CHANGED,
+		                    List.of()
+		            );
+		        }			    
+			        
+			        try {
+			        	
+			        	//API-responce check:
+			           return checkDays(csrf, centerId);
+
+			        } catch (IOException e) {
+
+			        	LOGGER.warning(
+			                    "DAYS_API_NETWORK_ERROR | "
+			                    + e.getClass().getSimpleName()
+			            );
+
+			            return new AvailabilityResult(
+			                    AppointmentStatus.NETWORK_ERROR,
+			                    List.of()
+			            );
+
+			        } catch (InterruptedException e) {
+
+			            Thread.currentThread().interrupt();
+
+			            LOGGER.warning(
+			                    "DAYS_API_INTERRUPTED"
+			            );
+
+			            return new AvailabilityResult(
+			                    AppointmentStatus.ERROR,
+			                    List.of()
+	                    );
+			        }
+		}
+			
+				// UNKNOW PAGE
+				return new AvailabilityResult(
+				        AppointmentStatus.PAGE_CHANGED,
+				        List.of()
+				);
+					
+	}
+	
+	private static boolean isTechnicalFailure(
 	        AppointmentStatus status) {
 
-	    String message =
-	            "HTTP " + httpStatusCode + " | " + status;
+	    return status == AppointmentStatus.ACCESS_FORBIDDEN
+	            || status == AppointmentStatus.NETWORK_ERROR
+	            || status == AppointmentStatus.RATE_LIMITED
+	            || status == AppointmentStatus.SERVER_ERROR
+	            || status == AppointmentStatus.ERROR;
+	}
+	
+	private static boolean isGeneralTechnicalFailure(
+	        AppointmentStatus status) {
+			
+	    return status == AppointmentStatus.NETWORK_ERROR
+	            || status == AppointmentStatus.SERVER_ERROR
+	            || status == AppointmentStatus.ERROR;
+	}
+	
+	private static String normalizeHtml(String html) {
+		return html.replace("&quot;", "\"");
+	}
+	
+	private static boolean isFormMode(String html) {
+		return html.contains(SERVICES_FORM);
+	}
 
-	    if (httpStatusCode >= 200 && httpStatusCode < 300) {
-	        LOGGER.info(message);
-	    } else {
-	        LOGGER.warning(message);
-	    }
+	private static String extractCsrf(String html) {
+		
+		String normalizedHtml = normalizeHtml(html);
+
+		Pattern pattern = Pattern.compile("\"csrf\"\\s*:\\s*\"([^\"]+)\"");
+
+		Matcher matcher = pattern.matcher(normalizedHtml);
+
+		if (matcher.find()) {
+			return matcher.group(1);
+		}
+
+		return null;
+	}
+
+	private static String extractCenterId(String html) {
+		
+		String normalizedHtml = normalizeHtml(html);
+
+		Pattern pattern = Pattern.compile("\"center\"\\s*:\\s*\"([^\"]+)\"");
+
+		Matcher matcher = pattern.matcher(normalizedHtml);
+
+		if (matcher.find()) {
+			return matcher.group(1);
+		}
+
+		return null;
+	}
+
+	private static String getStatusMessage(AppointmentStatus status) {
+
+		switch (status) {
+
+		case FULLY_BOOKED:
+			return "DP Dokument: В данный момент нет опубликованных дат для записи.";
+
+		case PAGE_CHANGED:
+			return "DP Dokument: состояние страницы изменилось!";
+
+		case RATE_LIMITED:
+			return "DP Dokument: превышение лимита запросов! (HTTP 429)";
+
+		case ACCESS_FORBIDDEN:
+			return "DP Dokument: доступ запрещён сервером (HTTP 403).";
+
+		case SERVER_ERROR:
+			return "DP Dokument: ошибка сервера (HTTP 500).";
+
+		case NETWORK_ERROR:
+			return "Oшибка сети или соединения.";
+
+		case ERROR:
+			return "Непредвиденная ошибка программы.";
+			
+		case AVAILABLE:
+			return "DP Dokument: появились даты для записи. Перейдите на сайт!";
+
+		default:
+			return "Неизвестное состояние.";
+		}
+	}
+
+	private static void notifyStatusChange(AvailabilityResult result) {
+		
+		AppointmentStatus status = result.getStatus();
+		
+		List<String> availableDates = result.getAvailableDates();
+		
+		String message;
+		
+		if (status == AppointmentStatus.AVAILABLE) {
+			if (availableDates.isEmpty()) {
+		        message =
+		                time()
+		                + " 🔥 Є доступні дати для запису. Перейдіть на сайт.";
+		    } else {
+
+		        String datesText =
+		                String.join("\n", availableDates);
+
+		        message =
+		                time()
+		                + " 🔥 Є доступні дати для запису:\n"
+		                + datesText;
+		    }
+		} else {
+			message = time()
+					+ " " + getStatusMessage(status);
+		}
+
+		// Message for telegram in console: System.out.println(message);
+
+		try {
+
+			TelegramNotifier.sendMessage(message);
+
+		} catch (IOException e) {
+
+			LOGGER.warning("TELEGRAM_SEND_ERROR | " + e.getClass().getSimpleName());
+
+		} catch (InterruptedException e) {
+
+			Thread.currentThread().interrupt();
+
+			LOGGER.warning("TELEGRAM_SEND_INTERRUPTED");
+		}
+	}
+
+	private static void saveSnapshot(String html) {
+
+		try {
+
+			Path directory = Path.of("snapshots");
+
+			Files.createDirectories(directory);
+
+			String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+
+			String fileName = timestamp + "_PAGE_CHANGED.html";
+
+			Path file = directory.resolve(fileName);
+
+			Files.writeString(file, html, StandardCharsets.UTF_8);
+
+			LOGGER.info("SNAPSHOT_SAVED | " + file.toAbsolutePath());
+
+		} catch (IOException e) {
+
+			LOGGER.warning("SNAPSHOT_SAVE_ERROR | " + e.getClass().getSimpleName());
+		}
+	}
+
+	private static void logHttpResult(int httpStatusCode, AppointmentStatus status) {
+
+		String message = "HTTP " + httpStatusCode + " | " + status;
+
+		if (httpStatusCode >= 200 && httpStatusCode < 300) {
+			LOGGER.info(message);
+		} else {
+			LOGGER.warning(message);
+		}
 	}
 
 	private static LocalTime time() {
 		LocalTime now = LocalTime.now();
 		LocalTime time = now.truncatedTo(ChronoUnit.MINUTES);
 		return time;
-	}	
+	}
+	
+	private static AvailabilityResult checkDays(
+	        String csrf,
+	        String centerId
+	) throws IOException, InterruptedException {
+
+	    String boundary =
+	            "----DpTrackerBoundary" + System.currentTimeMillis();
+
+	    String body =
+	            createMultipartBody(boundary, csrf, centerId);
+
+	    HttpRequest request =
+	            HttpRequest.newBuilder()
+	                    .uri(URI.create(URL))
+	                    .timeout(REQUEST_TIMEOUT)
+	                    .header(
+	                            "Content-Type",
+	                            "multipart/form-data; boundary=" + boundary
+	                    )
+	                    .header(
+	                            "Origin",
+	                            "https://munich.pasport.org.ua"
+	                    )
+	                    .header(
+	                            "Referer",
+	                            URL
+	                    )
+	                    .header(
+	                            "Accept",
+	                            "application/json, text/plain, */*"
+	                    )
+	                    
+	                    // Required by the back-end for the same-origin form request
+	                    .header("sec-fetch-site", "same-origin")
+	                    
+	                    .POST(
+	                            HttpRequest.BodyPublishers.ofString(body)
+	                    )
+	                    .build();
+
+
+	    HttpResponse<String> response =
+	            HTTP_CLIENT.send(
+	                    request,
+	                    HttpResponse.BodyHandlers.ofString()
+	            );
+	    
+	    String responseBody = response.body().trim();
+	    	    
+	    int apiStatusCode = response.statusCode();
+	    
+	    LOGGER.info(
+	            "DAYS_API | HTTP "
+	            + apiStatusCode
+	    );
+	    
+	    if (apiStatusCode == 429) {
+	        return new AvailabilityResult(
+	        		AppointmentStatus.RATE_LIMITED,
+	                List.of()
+	        		);
+	    }
+
+	    if (apiStatusCode == 403) {
+	        return new AvailabilityResult(
+	                AppointmentStatus.ACCESS_FORBIDDEN,
+	                List.of()
+	        );
+	    }
+
+	    if (apiStatusCode >= 500 && apiStatusCode < 600) {
+	        return new AvailabilityResult(
+	                AppointmentStatus.SERVER_ERROR,
+	                List.of()
+	        );
+	    }
+	    
+	    if (apiStatusCode == 200) {
+
+	        if (!responseBody.contains("\"days\"")) {
+
+	            LOGGER.warning(
+	                    "DAYS_API | UNEXPECTED_RESPONSE"
+	            );
+
+	            return new AvailabilityResult(
+	                    AppointmentStatus.ERROR,
+	                    List.of()
+	            );
+	        }
+
+	        List<String> availableDates =
+	                extractAvailableDates(responseBody);
+
+	        if (availableDates.isEmpty()) {
+
+	            LOGGER.info(
+	                    "DAYS_API | days=0"
+	            );
+
+	            return new AvailabilityResult(
+	                    AppointmentStatus.FULLY_BOOKED,
+	                    List.of()
+	            );
+	        }
+
+	        LOGGER.info(
+	                "DAYS_API | days="
+	                + availableDates.size()
+	                + " | "
+	                + String.join(", ", availableDates)
+	        );
+
+	        return new AvailabilityResult(
+	                AppointmentStatus.AVAILABLE,
+	                availableDates
+	        );
+	    }
+	    
+	    return new AvailabilityResult(
+                AppointmentStatus.ERROR,
+                List.of()
+        );
+	    	    	    
+	}
+	
+	private static String createMultipartBody(
+	        String boundary,
+	        String csrf,
+	        String centerId
+	) {
+
+	    String lineBreak = "\r\n";
+
+	    StringBuilder body = new StringBuilder();
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "form",
+	            "days",
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "ServiceCenterId",
+	            centerId,
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            "ServiceId",
+	            "4",
+	            lineBreak
+	    );
+
+	    addFormField(
+	            body,
+	            boundary,
+	            csrf,
+	            "1",
+	            lineBreak
+	    );
+
+	    body.append("--")
+	            .append(boundary)
+	            .append("--")
+	            .append(lineBreak);
+
+	    return body.toString();
+	}
+	
+	private static void addFormField(
+	        StringBuilder body,
+	        String boundary,
+	        String name,
+	        String value,
+	        String lineBreak
+	) {
+
+	    body.append("--")
+	            .append(boundary)
+	            .append(lineBreak);
+
+	    body.append(
+	            "Content-Disposition: form-data; name=\""
+	    )
+	            .append(name)
+	            .append("\"")
+	            .append(lineBreak);
+
+	    body.append(lineBreak);
+
+	    body.append(value)
+	            .append(lineBreak);
+	}
+	
+	private static List<String> extractAvailableDates(String responseBody) {
+
+	    List<String> dates = new ArrayList<>();
+
+	    Pattern pattern =
+	            Pattern.compile("\"date\"\\s*:\\s*\"([^\"]+)\"");
+
+	    Matcher matcher = pattern.matcher(responseBody);
+
+	    while (matcher.find()) {
+	        dates.add(matcher.group(1));
+	    }
+
+	    return dates;
+	}
+	
+	private static class CheckExecutionResult {
+
+	    private final AvailabilityResult result;
+	    private final String html;
+
+	    public CheckExecutionResult(
+	            AvailabilityResult result,
+	            String html) {
+
+	        this.result = result;
+	        this.html = html;
+	    }
+
+	    public AvailabilityResult getResult() {
+	        return result;
+	    }
+
+	    public String getHtml() {
+	        return html;
+	    }
+	}
+	
+	
 }
-
-
