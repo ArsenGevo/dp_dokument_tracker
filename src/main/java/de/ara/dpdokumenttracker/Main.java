@@ -1,9 +1,5 @@
 package de.ara.dpdokumenttracker;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.io.IOException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -18,11 +14,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.logging.Logger;
 import java.util.logging.Level;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.net.CookieManager;
-import java.net.CookiePolicy;
-import java.util.ArrayList;
 import java.util.List;
 import java.time.Instant;
 import java.net.InetAddress;
@@ -30,30 +21,10 @@ import java.net.UnknownHostException;
 
 public class Main {
 
-	private static final String URL = "https://munich.pasport.org.ua/solutions/e-queue";
-	 
-	//private static final String URL = "http://127.0.0.1:5500/index.html";
-
-	private static final String BUSY_MESSAGE = "Наразі всі місця зайняті.";
-
-	private static final String SERVICES_FORM = "id=\"services\"";
-		
-	private static final CookieManager COOKIE_MANAGER =
-	        new CookieManager(null, CookiePolicy.ACCEPT_ALL);
-	
-	private static final Duration REQUEST_TIMEOUT =
-	        Duration.ofSeconds(60);
-	private static final Duration CONNECT_TIMEOUT =
-	        Duration.ofSeconds(5);
-
-	private static final HttpClient HTTP_CLIENT = 
-			HttpClient.newBuilder()
-			//.version(HttpClient.Version.HTTP_1_1)
-			.cookieHandler(COOKIE_MANAGER)
-			.connectTimeout(CONNECT_TIMEOUT)
-			.build();
-
 	private static final Logger LOGGER = TrackerLogger.getLogger();
+
+	private static final AppointmentSiteClient APPOINTMENT_SITE_CLIENT =
+			new HttpAppointmentSiteClient();
 
 
 	private static AppointmentStatus previousStatus = null;
@@ -157,14 +128,10 @@ public class Main {
 		    return;
 		}
 		
-		CheckExecutionResult executionResult =
-		        performCheck();
-
 		AvailabilityResult result =
-		        executionResult.getResult();
+		        APPOINTMENT_SITE_CLIENT.checkAvailability();
 
-		String html =
-		        executionResult.getHtml();
+		String html = result.getPageHtml();
 		
 		AppointmentStatus status = result.getStatus();
 		
@@ -229,116 +196,6 @@ public class Main {
 	    }
 
 	    return false;
-	}
-	
-	private static CheckExecutionResult performCheck() {
-
-	    String html = null;
-
-	    try {
-
-	        HttpResponse<String> response = loadPage();
-
-	        int httpStatusCode = response.statusCode();
-	        html = response.body();
-
-	        AvailabilityResult result;
-
-	        if (httpStatusCode >= 200 && httpStatusCode < 300) {
-
-	            result = checkStatus(html);
-
-	        } else if (httpStatusCode == 429) {
-
-	            result = new AvailabilityResult(
-	                    AppointmentStatus.RATE_LIMITED,
-	                    List.of()
-	            );
-
-	        } else if (httpStatusCode == 403) {
-
-	            result = new AvailabilityResult(
-	                    AppointmentStatus.ACCESS_FORBIDDEN,
-	                    List.of()
-	            );
-
-	        } else if (httpStatusCode >= 500
-	                && httpStatusCode < 600) {
-
-	            result = new AvailabilityResult(
-	                    AppointmentStatus.SERVER_ERROR,
-	                    List.of()
-	            );
-
-	        } else {
-
-	            result = new AvailabilityResult(
-	                    AppointmentStatus.ERROR,
-	                    List.of()
-	            );
-	        }
-
-	        logHttpResult(
-	                httpStatusCode,
-	                result.getStatus()
-	        );
-
-	        return new CheckExecutionResult(
-	                result,
-	                html
-	        );
-
-	    } catch (IOException e) {
-
-	        LOGGER.log(
-	                Level.WARNING,
-	                "NETWORK_ERROR | "
-	                + e.getClass().getSimpleName()
-	        );
-
-	        return new CheckExecutionResult(
-	                new AvailabilityResult(
-	                        AppointmentStatus.NETWORK_ERROR,
-	                        List.of()
-	                ),
-	                html
-	        );
-
-	    } catch (InterruptedException e) {
-
-	        Thread.currentThread().interrupt();
-
-	        LOGGER.log(
-	                Level.WARNING,
-	                "Check thread was interrupted",
-	                e
-	        );
-
-	        return new CheckExecutionResult(
-	                new AvailabilityResult(
-	                        AppointmentStatus.ERROR,
-	                        List.of()
-	                ),
-	                html
-	        );
-
-	    } catch (Exception e) {
-
-	        LOGGER.log(
-	                Level.WARNING,
-	                "UNEXPECTED_ERROR | "
-	                + e.getClass().getSimpleName(),
-	                e
-	        );
-
-	        return new CheckExecutionResult(
-	                new AvailabilityResult(
-	                        AppointmentStatus.ERROR,
-	                        List.of()
-	                ),
-	                html
-	        );
-	    }
 	}
 	
 	private static void handleSuccessfulCheck(
@@ -526,87 +383,6 @@ public class Main {
 	    }
 	}
 	
-	private static HttpResponse<String> loadPage() throws IOException, InterruptedException {
-
-		HttpRequest request = HttpRequest.newBuilder().uri(URI.create(URL)).timeout(REQUEST_TIMEOUT).GET()
-				.build();
-
-		HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-		
-		System.out.println(
-		        "HTTP version: " + response.version()
-		);
-
-		return response;
-	}
-
-	private static AvailabilityResult checkStatus(String html) {
-		
-		//MODE A: BUSY_MESSAGE
-		if (html.contains(BUSY_MESSAGE)) {
-			
-			return new AvailabilityResult(
-		            AppointmentStatus.FULLY_BOOKED,
-		            List.of()
-		    ); 
-			
-			} 
-		
-		//MODE B: BOOKING_FORM
-		if (isFormMode(html)) {
-				
-				LOGGER.info("PAGE_MODE | BOOKING_FORM");
-				
-				String csrf = extractCsrf(html);
-			    String centerId = extractCenterId(html);
-			    
-			    if (csrf == null || centerId == null) {
-		            return new AvailabilityResult(
-		                    AppointmentStatus.PAGE_CHANGED,
-		                    List.of()
-		            );
-		        }			    
-			        
-			        try {
-			        	
-			        	//API-responce check:
-			           return checkDays(csrf, centerId);
-
-			        } catch (IOException e) {
-
-			        	LOGGER.warning(
-			                    "DAYS_API_NETWORK_ERROR | "
-			                    + e.getClass().getSimpleName()
-			            );
-
-			            return new AvailabilityResult(
-			                    AppointmentStatus.NETWORK_ERROR,
-			                    List.of()
-			            );
-
-			        } catch (InterruptedException e) {
-
-			            Thread.currentThread().interrupt();
-
-			            LOGGER.warning(
-			                    "DAYS_API_INTERRUPTED"
-			            );
-
-			            return new AvailabilityResult(
-			                    AppointmentStatus.ERROR,
-			                    List.of()
-	                    );
-			        }
-		}
-			
-				// UNKNOW PAGE
-				return new AvailabilityResult(
-				        AppointmentStatus.PAGE_CHANGED,
-				        List.of()
-				);
-					
-	}
-	
 	private static boolean isTechnicalFailure(
 	        AppointmentStatus status) {
 
@@ -625,44 +401,6 @@ public class Main {
 	            || status == AppointmentStatus.ERROR;
 	}
 	
-	private static String normalizeHtml(String html) {
-		return html.replace("&quot;", "\"");
-	}
-	
-	private static boolean isFormMode(String html) {
-		return html.contains(SERVICES_FORM);
-	}
-
-	private static String extractCsrf(String html) {
-		
-		String normalizedHtml = normalizeHtml(html);
-
-		Pattern pattern = Pattern.compile("\"csrf\"\\s*:\\s*\"([^\"]+)\"");
-
-		Matcher matcher = pattern.matcher(normalizedHtml);
-
-		if (matcher.find()) {
-			return matcher.group(1);
-		}
-
-		return null;
-	}
-
-	private static String extractCenterId(String html) {
-		
-		String normalizedHtml = normalizeHtml(html);
-
-		Pattern pattern = Pattern.compile("\"center\"\\s*:\\s*\"([^\"]+)\"");
-
-		Matcher matcher = pattern.matcher(normalizedHtml);
-
-		if (matcher.find()) {
-			return matcher.group(1);
-		}
-
-		return null;
-	}
-
 	private static String getStatusMessage(AppointmentStatus status) {
 
 		switch (status) {
@@ -743,6 +481,9 @@ public class Main {
 	}
 
 	private static void saveSnapshot(String html) {
+		if (html == null) {
+			return;
+		}
 
 		try {
 
@@ -766,261 +507,10 @@ public class Main {
 		}
 	}
 
-	private static void logHttpResult(int httpStatusCode, AppointmentStatus status) {
-
-		String message = "HTTP " + httpStatusCode + " | " + status;
-
-		if (httpStatusCode >= 200 && httpStatusCode < 300) {
-			LOGGER.info(message);
-		} else {
-			LOGGER.warning(message);
-		}
-	}
-
 	private static LocalTime time() {
 		LocalTime now = LocalTime.now();
 		LocalTime time = now.truncatedTo(ChronoUnit.MINUTES);
 		return time;
 	}
-	
-	private static AvailabilityResult checkDays(
-	        String csrf,
-	        String centerId
-	) throws IOException, InterruptedException {
-
-	    String boundary =
-	            "----DpTrackerBoundary" + System.currentTimeMillis();
-
-	    String body =
-	            createMultipartBody(boundary, csrf, centerId);
-
-	    HttpRequest request =
-	            HttpRequest.newBuilder()
-	                    .uri(URI.create(URL))
-	                    .timeout(REQUEST_TIMEOUT)
-	                    .header(
-	                            "Content-Type",
-	                            "multipart/form-data; boundary=" + boundary
-	                    )
-	                    .header(
-	                            "Origin",
-	                            "https://munich.pasport.org.ua"
-	                    )
-	                    .header(
-	                            "Referer",
-	                            URL
-	                    )
-	                    .header(
-	                            "Accept",
-	                            "application/json, text/plain, */*"
-	                    )
-	                    
-	                    // Required by the back-end for the same-origin form request
-	                    .header("sec-fetch-site", "same-origin")
-	                    
-	                    .POST(
-	                            HttpRequest.BodyPublishers.ofString(body)
-	                    )
-	                    .build();
-
-
-	    HttpResponse<String> response =
-	            HTTP_CLIENT.send(
-	                    request,
-	                    HttpResponse.BodyHandlers.ofString()
-	            );
-	    
-	    String responseBody = response.body().trim();
-	    	    
-	    int apiStatusCode = response.statusCode();
-	    
-	    LOGGER.info(
-	            "DAYS_API | HTTP "
-	            + apiStatusCode
-	    );
-	    
-	    if (apiStatusCode == 429) {
-	        return new AvailabilityResult(
-	        		AppointmentStatus.RATE_LIMITED,
-	                List.of()
-	        		);
-	    }
-
-	    if (apiStatusCode == 403) {
-	        return new AvailabilityResult(
-	                AppointmentStatus.ACCESS_FORBIDDEN,
-	                List.of()
-	        );
-	    }
-
-	    if (apiStatusCode >= 500 && apiStatusCode < 600) {
-	        return new AvailabilityResult(
-	                AppointmentStatus.SERVER_ERROR,
-	                List.of()
-	        );
-	    }
-	    
-	    if (apiStatusCode == 200) {
-
-	        if (!responseBody.contains("\"days\"")) {
-
-	            LOGGER.warning(
-	                    "DAYS_API | UNEXPECTED_RESPONSE"
-	            );
-
-	            return new AvailabilityResult(
-	                    AppointmentStatus.ERROR,
-	                    List.of()
-	            );
-	        }
-
-	        List<String> availableDates =
-	                extractAvailableDates(responseBody);
-
-	        if (availableDates.isEmpty()) {
-
-	            LOGGER.info(
-	                    "DAYS_API | days=0"
-	            );
-
-	            return new AvailabilityResult(
-	                    AppointmentStatus.FULLY_BOOKED,
-	                    List.of()
-	            );
-	        }
-
-	        LOGGER.info(
-	                "DAYS_API | days="
-	                + availableDates.size()
-	                + " | "
-	                + String.join(", ", availableDates)
-	        );
-
-	        return new AvailabilityResult(
-	                AppointmentStatus.AVAILABLE,
-	                availableDates
-	        );
-	    }
-	    
-	    return new AvailabilityResult(
-                AppointmentStatus.ERROR,
-                List.of()
-        );
-	    	    	    
-	}
-	
-	private static String createMultipartBody(
-	        String boundary,
-	        String csrf,
-	        String centerId
-	) {
-
-	    String lineBreak = "\r\n";
-
-	    StringBuilder body = new StringBuilder();
-
-	    addFormField(
-	            body,
-	            boundary,
-	            "form",
-	            "days",
-	            lineBreak
-	    );
-
-	    addFormField(
-	            body,
-	            boundary,
-	            "ServiceCenterId",
-	            centerId,
-	            lineBreak
-	    );
-
-	    addFormField(
-	            body,
-	            boundary,
-	            "ServiceId",
-	            "4",
-	            lineBreak
-	    );
-
-	    addFormField(
-	            body,
-	            boundary,
-	            csrf,
-	            "1",
-	            lineBreak
-	    );
-
-	    body.append("--")
-	            .append(boundary)
-	            .append("--")
-	            .append(lineBreak);
-
-	    return body.toString();
-	}
-	
-	private static void addFormField(
-	        StringBuilder body,
-	        String boundary,
-	        String name,
-	        String value,
-	        String lineBreak
-	) {
-
-	    body.append("--")
-	            .append(boundary)
-	            .append(lineBreak);
-
-	    body.append(
-	            "Content-Disposition: form-data; name=\""
-	    )
-	            .append(name)
-	            .append("\"")
-	            .append(lineBreak);
-
-	    body.append(lineBreak);
-
-	    body.append(value)
-	            .append(lineBreak);
-	}
-	
-	private static List<String> extractAvailableDates(String responseBody) {
-
-	    List<String> dates = new ArrayList<>();
-
-	    Pattern pattern =
-	            Pattern.compile("\"date\"\\s*:\\s*\"([^\"]+)\"");
-
-	    Matcher matcher = pattern.matcher(responseBody);
-
-	    while (matcher.find()) {
-	        dates.add(matcher.group(1));
-	    }
-
-	    return dates;
-	}
-	
-	private static class CheckExecutionResult {
-
-	    private final AvailabilityResult result;
-	    private final String html;
-
-	    public CheckExecutionResult(
-	            AvailabilityResult result,
-	            String html) {
-
-	        this.result = result;
-	        this.html = html;
-	    }
-
-	    public AvailabilityResult getResult() {
-	        return result;
-	    }
-
-	    public String getHtml() {
-	        return html;
-	    }
-	}
-	
 	
 }
